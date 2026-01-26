@@ -118,16 +118,12 @@ func extractTextFromPDFContent(content string) string {
 	// Text showing operators include: Tj, TJ, ', "
 	// We look for text in parentheses (literal strings) or angle brackets (hex strings)
 
-	// Pattern for text in parentheses
-	textRe := regexp.MustCompile(`\(([^)]*)\)`)
-	matches := textRe.FindAllStringSubmatch(content, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			// Decode PDF string escapes
-			text := decodePDFString(match[1])
-			result.WriteString(text)
-			result.WriteString(" ")
-		}
+	// Extract text from parenthesized strings using a parser that handles escapes
+	extractedStrings := extractPDFStrings(content)
+	for _, s := range extractedStrings {
+		text := decodePDFString(s)
+		result.WriteString(text)
+		result.WriteString(" ")
 	}
 
 	// Pattern for hex strings
@@ -144,6 +140,66 @@ func extractTextFromPDFContent(content string) string {
 	}
 
 	return result.String()
+}
+
+// extractPDFStrings extracts strings enclosed in parentheses, handling escaped parens
+func extractPDFStrings(content string) []string {
+	var results []string
+	i := 0
+	for i < len(content) {
+		if content[i] == '(' {
+			// Find matching closing parenthesis, handling escapes and nested parens
+			str, endIdx := extractPDFString(content, i)
+			if endIdx > i {
+				results = append(results, str)
+				i = endIdx
+			} else {
+				i++
+			}
+		} else {
+			i++
+		}
+	}
+	return results
+}
+
+// extractPDFString extracts a single parenthesized string starting at position start
+// Returns the string content (without outer parens) and the index after the closing paren
+func extractPDFString(content string, start int) (string, int) {
+	if start >= len(content) || content[start] != '(' {
+		return "", start
+	}
+
+	var result strings.Builder
+	depth := 0
+	i := start
+
+	for i < len(content) {
+		ch := content[i]
+		if ch == '\\' && i+1 < len(content) {
+			// Escaped character - include both backslash and next char in result
+			result.WriteByte(ch)
+			result.WriteByte(content[i+1])
+			i += 2
+			continue
+		}
+		if ch == '(' {
+			depth++
+			if depth > 1 {
+				result.WriteByte(ch)
+			}
+		} else if ch == ')' {
+			depth--
+			if depth == 0 {
+				return result.String(), i + 1
+			}
+			result.WriteByte(ch)
+		} else if depth > 0 {
+			result.WriteByte(ch)
+		}
+		i++
+	}
+	return result.String(), i
 }
 
 // decodePDFString decodes escape sequences in PDF literal strings
@@ -195,7 +251,7 @@ func decodePDFString(s string) string {
 	return result.String()
 }
 
-// decodeHexString decodes hex-encoded strings
+// decodeHexString decodes hex-encoded strings, including Turkish and other Unicode characters
 func decodeHexString(hex string) string {
 	var result strings.Builder
 	// Pad with 0 if odd length
@@ -207,7 +263,9 @@ func decodeHexString(hex string) string {
 		if err != nil {
 			continue
 		}
-		if val >= 32 && val < 127 {
+		// Include printable ASCII (32-126) and extended Latin characters (128-255)
+		// This covers Turkish characters like İ, Ş, Ğ, Ö, Ü, Ç and their lowercase variants
+		if (val >= 32 && val <= 126) || (val >= 128 && val <= 255) {
 			result.WriteRune(rune(val))
 		}
 	}
