@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ledongthuc/pdf"
+	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
 // Parser is responsible for parsing Turkish tax plate PDFs
@@ -53,59 +55,42 @@ func (p *Parser) Parse(reader io.ReadSeeker) (*VergiLevhasi, error) {
 	// Create a reader from the data
 	rs := bytes.NewReader(data)
 
-	// Create PDF reader using ledongthuc/pdf
-	pdfReader, err := pdf.NewReader(rs, int64(len(data)))
+	// Create pdfcpu configuration
+	conf := model.NewDefaultConfiguration()
+
+	// Read, validate and optimize the PDF safely using pdfcpu
+	ctx, err := api.ReadValidateAndOptimize(rs, conf)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create PDF reader: %w", err)
+		return nil, fmt.Errorf("failed to read and validate PDF: %w", err)
 	}
 
-	// Extract text from all pages using GetPlainText
-	textReader, err := pdfReader.GetPlainText()
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract text from PDF: %w", err)
-	}
-
-	textBytes, err := io.ReadAll(textReader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read extracted text: %w", err)
-	}
-
-	rawText := string(textBytes)
-
-	// Also try to extract text row by row from each page to capture more content
-	var additionalText strings.Builder
-	numPages := pdfReader.NumPage()
-	for pageNum := 1; pageNum <= numPages; pageNum++ {
-		page := pdfReader.Page(pageNum)
-		if page.V.IsNull() {
+	// Extract text from all pages using pdfcpu's ExtractPageContent
+	var rawText strings.Builder
+	for pageNr := 1; pageNr <= ctx.PageCount; pageNr++ {
+		contentReader, err := pdfcpu.ExtractPageContent(ctx, pageNr)
+		if err != nil {
+			continue
+		}
+		if contentReader == nil {
 			continue
 		}
 
-		// Try GetTextByRow
-		rows, err := page.GetTextByRow()
-		if err == nil {
-			for _, row := range rows {
-				for _, word := range row.Content {
-					additionalText.WriteString(word.S)
-					additionalText.WriteString(" ")
-				}
-				additionalText.WriteString("\n")
-			}
+		contentBytes, err := io.ReadAll(contentReader)
+		if err != nil {
+			continue
 		}
 
-		// Also try Content() which might have more raw text
-		content := page.Content()
-		for _, text := range content.Text {
-			additionalText.WriteString(text.S)
-			additionalText.WriteString(" ")
-		}
+		// Parse the PDF content stream to extract text
+		pageText := extractTextFromPDFContent(string(contentBytes))
+		rawText.WriteString(pageText)
+		rawText.WriteString("\n")
 	}
 
 	// Try to extract VKN from raw PDF data (sometimes it's encoded differently)
 	vknFromRaw := p.extractVKNFromRawPDF(data)
 
-	// Combine all extraction methods
-	combinedText := rawText + "\n" + additionalText.String()
+	// Combine extraction methods
+	combinedText := rawText.String()
 	if vknFromRaw != "" {
 		combinedText += "\nVergi Kimlik No: " + vknFromRaw
 	}
@@ -123,6 +108,110 @@ func (p *Parser) Parse(reader io.ReadSeeker) (*VergiLevhasi, error) {
 	p.parseContent(vergiLevhasi, combinedText)
 
 	return vergiLevhasi, nil
+}
+
+// extractTextFromPDFContent parses PDF content stream operators to extract text
+func extractTextFromPDFContent(content string) string {
+	var result strings.Builder
+
+	// PDF text is encoded between BT (begin text) and ET (end text)
+	// Text showing operators include: Tj, TJ, ', "
+	// We look for text in parentheses (literal strings) or angle brackets (hex strings)
+
+	// Pattern for text in parentheses
+	textRe := regexp.MustCompile(`\(([^)]*)\)`)
+	matches := textRe.FindAllStringSubmatch(content, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			// Decode PDF string escapes
+			text := decodePDFString(match[1])
+			result.WriteString(text)
+			result.WriteString(" ")
+		}
+	}
+
+	// Pattern for hex strings
+	hexRe := regexp.MustCompile(`<([0-9A-Fa-f]+)>`)
+	hexMatches := hexRe.FindAllStringSubmatch(content, -1)
+	for _, match := range hexMatches {
+		if len(match) > 1 {
+			text := decodeHexString(match[1])
+			if text != "" {
+				result.WriteString(text)
+				result.WriteString(" ")
+			}
+		}
+	}
+
+	return result.String()
+}
+
+// decodePDFString decodes escape sequences in PDF literal strings
+func decodePDFString(s string) string {
+	var result strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 'n':
+				result.WriteRune('\n')
+			case 'r':
+				result.WriteRune('\r')
+			case 't':
+				result.WriteRune('\t')
+			case 'b':
+				result.WriteRune('\b')
+			case 'f':
+				result.WriteRune('\f')
+			case '(':
+				result.WriteRune('(')
+			case ')':
+				result.WriteRune(')')
+			case '\\':
+				result.WriteRune('\\')
+			default:
+				// Octal escape sequence
+				if s[i+1] >= '0' && s[i+1] <= '7' {
+					octal := string(s[i+1])
+					j := i + 2
+					for k := 0; k < 2 && j < len(s) && s[j] >= '0' && s[j] <= '7'; k++ {
+						octal += string(s[j])
+						j++
+					}
+					if val, err := strconv.ParseInt(octal, 8, 32); err == nil {
+						result.WriteRune(rune(val))
+					}
+					i = j - 1
+				} else {
+					result.WriteByte(s[i+1])
+				}
+			}
+			i += 2
+		} else {
+			result.WriteByte(s[i])
+			i++
+		}
+	}
+	return result.String()
+}
+
+// decodeHexString decodes hex-encoded strings
+func decodeHexString(hex string) string {
+	var result strings.Builder
+	// Pad with 0 if odd length
+	if len(hex)%2 != 0 {
+		hex += "0"
+	}
+	for i := 0; i+1 < len(hex); i += 2 {
+		val, err := strconv.ParseInt(hex[i:i+2], 16, 32)
+		if err != nil {
+			continue
+		}
+		if val >= 32 && val < 127 {
+			result.WriteRune(rune(val))
+		}
+	}
+	return result.String()
 }
 
 // extractVKNFromRawPDF searches for 10-digit VKN patterns in raw PDF data

@@ -12,7 +12,7 @@ This is a ZERO-DEPENDENCY implementation that works without:
 
 It uses:
 - Pure Go image processing
-- Built-in PDF text/image extraction from the existing ledongthuc/pdf library
+- Built-in PDF text/image extraction from the pdfcpu library
 - Feature-based digit recognition with a trained classifier
 
 Usage:
@@ -41,9 +41,11 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 
-	"github.com/ledongthuc/pdf"
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/oned"
+	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/sunshineplan/imgconv"
 	pdf2 "github.com/sunshineplan/pdf"
 )
@@ -95,25 +97,40 @@ func (p *OCRParser) ExtractVKNFromPDFReader(reader io.ReadSeeker) (string, error
 	}
 
 	rs := bytes.NewReader(data)
-	pdfReader, err := pdf.NewReader(rs, int64(len(data)))
+
+	// Create pdfcpu configuration
+	conf := model.NewDefaultConfiguration()
+
+	// Read, validate and optimize the PDF safely using pdfcpu
+	ctx, err := api.ReadValidateAndOptimize(rs, conf)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse PDF: %w", err)
+		return "", fmt.Errorf("failed to read and validate PDF: %w", err)
 	}
 
-	// First, try to find VKN in text
-	textReader, err := pdfReader.GetPlainText()
-	if err == nil {
-		textBytes, _ := io.ReadAll(textReader)
-		text := string(textBytes)
-
-		// Look for 10-digit VKN in text
-		re := regexp.MustCompile(`\b([1-9]\d{9})\b`)
-		if match := re.FindString(text); match != "" {
-			if p.debug {
-				fmt.Printf("Found VKN in text: %s\n", match)
-			}
-			return match, nil
+	// First, try to find VKN in text extracted from PDF content
+	var textBuffer strings.Builder
+	for pageNr := 1; pageNr <= ctx.PageCount; pageNr++ {
+		contentReader, err := pdfcpu.ExtractPageContent(ctx, pageNr)
+		if err != nil || contentReader == nil {
+			continue
 		}
+		contentBytes, err := io.ReadAll(contentReader)
+		if err != nil {
+			continue
+		}
+		pageText := extractTextFromPDFContent(string(contentBytes))
+		textBuffer.WriteString(pageText)
+	}
+
+	text := textBuffer.String()
+
+	// Look for 10-digit VKN in text
+	re := regexp.MustCompile(`\b([1-9]\d{9})\b`)
+	if match := re.FindString(text); match != "" {
+		if p.debug {
+			fmt.Printf("Found VKN in text: %s\n", match)
+		}
+		return match, nil
 	}
 
 	if p.debug {
@@ -159,29 +176,11 @@ func (p *OCRParser) ExtractVKNFromPDFReader(reader io.ReadSeeker) (string, error
 		}
 	}
 
-	// Try extracting from page content
+	// Try extracting digits from the text we already extracted
 	var allDigits strings.Builder
-	numPages := pdfReader.NumPage()
-
-	for pageNum := 1; pageNum <= numPages; pageNum++ {
-		page := pdfReader.Page(pageNum)
-		if page.V.IsNull() {
-			continue
-		}
-
-		content := page.Content()
-
-		if p.debug {
-			fmt.Printf("Page %d: %d text elements\n", pageNum, len(content.Text))
-		}
-
-		// Look for any sequences of digits
-		for _, t := range content.Text {
-			for _, ch := range t.S {
-				if ch >= '0' && ch <= '9' {
-					allDigits.WriteRune(ch)
-				}
-			}
+	for _, ch := range text {
+		if ch >= '0' && ch <= '9' {
+			allDigits.WriteRune(ch)
 		}
 	}
 
@@ -193,7 +192,7 @@ func (p *OCRParser) ExtractVKNFromPDFReader(reader io.ReadSeeker) (string, error
 
 	// Look for VKN pattern (10 digits starting with non-zero, not looking like a date)
 	// VKN candidates must NOT be part of a longer number sequence
-	re := regexp.MustCompile(`([1-9]\d{9})`)
+	re = regexp.MustCompile(`([1-9]\d{9})`)
 	matches := re.FindAllString(digitStr, -1)
 
 	var candidates []string
