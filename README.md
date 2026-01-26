@@ -217,7 +217,7 @@ go run -tags ocr example/main.go path/to/vergi-levhasi.pdf
 
 ## Bağımlılıklar
 
-- [github.com/ledongthuc/pdf](https://github.com/ledongthuc/pdf) - PDF metin çıkarma kütüphanesi
+- [github.com/pdfcpu/pdfcpu](https://github.com/pdfcpu/pdfcpu) - PDF işleme ve metin çıkarma kütüphanesi
 
 ## Lisans
 
