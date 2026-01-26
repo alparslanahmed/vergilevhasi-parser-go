@@ -41,3 +41,16 @@ Thumbs.db
 # Build artifacts
 /bin/
 /build/
+
+# PDF files (may contain personal data)
+*.pdf
+
+# Image files from PDF extraction
+*.png
+*.jpg
+*.jpeg
+
+# Test data with personal information
+ivd.pdf
+testdata/*.pdf
+

@@ -1,3 +1,41 @@
+/*
+Package vergilevhasi provides tools for parsing Turkish tax plate (Vergi Levhası) PDF documents.
+
+This library extracts structured data from tax plate PDFs issued by the Turkish Revenue
+Administration (Gelir İdaresi Başkanlığı - GİB).
+
+# Basic Usage
+
+	parser := vergilevhasi.NewParser()
+	result, err := parser.ParseFile("vergi-levhasi.pdf")
+	if err != nil {
+	    log.Fatal(err)
+	}
+	fmt.Printf("VKN: %s\n", result.VergiKimlikNo)
+
+# Extracted Fields
+
+The parser extracts the following information:
+  - Adı Soyadı (Full Name) - for individuals
+  - Ticaret Ünvanı (Trade Name) - for companies
+  - İş Yeri Adresi (Business Address)
+  - Vergi Türü (Tax Types)
+  - Faaliyet Kodları (Activity Codes - NACE codes)
+  - Vergi Dairesi (Tax Office)
+  - Vergi Kimlik No (Tax ID Number - VKN)
+  - TC Kimlik No (Turkish ID Number - TCKN) - for individuals
+  - İşe Başlama Tarihi (Business Start Date)
+  - Geçmiş Matrahlar (Historical Tax Bases)
+
+# OCR Support
+
+For PDFs where the VKN is embedded as a barcode image rather than text,
+use the OCR parser (requires build tag 'ocr'):
+
+	// Build with: go build -tags ocr
+	parser, _ := vergilevhasi.NewOCRParser()
+	vkn, err := parser.ExtractVKNFromPDF("vergi-levhasi.pdf")
+*/
 package vergilevhasi
 
 import (
@@ -48,8 +86,8 @@ type Faaliyet struct {
 
 // Matrah represents historical tax base information
 type Matrah struct {
-	Yil    int     `json:"yil"`
-	Donem  string  `json:"donem,omitempty"`
-	Tutar  float64 `json:"tutar,omitempty"`
-	Tur    string  `json:"tur,omitempty"`
+	Yil   int     `json:"yil"`
+	Donem string  `json:"donem,omitempty"`
+	Tutar float64 `json:"tutar,omitempty"`
+	Tur   string  `json:"tur,omitempty"`
 }

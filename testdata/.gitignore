@@ -1,0 +1,2 @@
+# Ignore test PDF files (may contain personal data)
+*.pdf

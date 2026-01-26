@@ -36,15 +36,15 @@ func TestExtractField(t *testing.T) {
 	}{
 		{
 			name:     "Extract name",
-			text:     "Adı Soyadı: Ahmet Yılmaz\n",
+			text:     "Adı Soyadı: Ali Örnek\n",
 			patterns: []string{`(?i)adı\s*soyadı\s*[:：]\s*(.+?)(?:\n|$)`},
-			want:     "Ahmet Yılmaz",
+			want:     "Ali Örnek",
 		},
 		{
 			name:     "Extract tax office",
-			text:     "Vergi Dairesi: İstanbul VD\n",
+			text:     "Vergi Dairesi: Örnek VD\n",
 			patterns: []string{`(?i)vergi\s*dairesi\s*[:：]\s*(.+?)(?:\n|$)`},
-			want:     "İstanbul VD",
+			want:     "Örnek VD",
 		},
 		{
 			name:     "No match",
@@ -218,12 +218,13 @@ func TestExtractTaxBases(t *testing.T) {
 func TestParseContent(t *testing.T) {
 	parser := NewParser()
 
+	// Using clearly fictional dummy data for testing
 	text := `
-	Adı Soyadı: Ahmet Yılmaz
-	TC Kimlik No: 12345678901
+	Adı Soyadı: Ali Örnek
+	TC Kimlik No: 11111111110
 	Vergi Kimlik No: 1234567890
-	Vergi Dairesi: İstanbul VD
-	İş Yeri Adresi: Kadıköy, İstanbul
+	Vergi Dairesi: Örnek VD
+	İş Yeri Adresi: Örnek Mah. Test Cad. No:1, Ankara
 	İşe Başlama Tarihi: 01.01.2020
 	Gelir Vergisi
 	KDV
@@ -234,24 +235,24 @@ func TestParseContent(t *testing.T) {
 	vl := &VergiLevhasi{}
 	parser.parseContent(vl, text)
 
-	if vl.AdiSoyadi != "Ahmet Yılmaz" {
-		t.Errorf("AdiSoyadi = %v, want 'Ahmet Yılmaz'", vl.AdiSoyadi)
+	if vl.AdiSoyadi != "Ali Örnek" {
+		t.Errorf("AdiSoyadi = %v, want 'Ali Örnek'", vl.AdiSoyadi)
 	}
 
-	if vl.TCKimlikNo != "12345678901" {
-		t.Errorf("TCKimlikNo = %v, want '12345678901'", vl.TCKimlikNo)
+	if vl.TCKimlikNo != "11111111110" {
+		t.Errorf("TCKimlikNo = %v, want '11111111110'", vl.TCKimlikNo)
 	}
 
 	if vl.VergiKimlikNo != "1234567890" {
 		t.Errorf("VergiKimlikNo = %v, want '1234567890'", vl.VergiKimlikNo)
 	}
 
-	if vl.VergiDairesi != "İstanbul VD" {
-		t.Errorf("VergiDairesi = %v, want 'İstanbul VD'", vl.VergiDairesi)
+	if vl.VergiDairesi != "Örnek VD" {
+		t.Errorf("VergiDairesi = %v, want 'Örnek VD'", vl.VergiDairesi)
 	}
 
-	if !strings.Contains(vl.IsYeriAdresi, "Kadıköy") {
-		t.Errorf("IsYeriAdresi = %v, want to contain 'Kadıköy'", vl.IsYeriAdresi)
+	if !strings.Contains(vl.IsYeriAdresi, "Örnek") {
+		t.Errorf("IsYeriAdresi = %v, want to contain 'Örnek'", vl.IsYeriAdresi)
 	}
 
 	if vl.IseBaslamaTarihi == nil {

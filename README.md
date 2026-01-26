@@ -1,6 +1,20 @@
 # vergilevhasi-parser-go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/alparslanahmed/vergilevhasi-parser-go.svg)](https://pkg.go.dev/github.com/alparslanahmed/vergilevhasi-parser-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/alparslanahmed/vergilevhasi-parser-go)](https://goreportcard.com/report/github.com/alparslanahmed/vergilevhasi-parser-go)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Türkiye Cumhuriyeti Gelir İdaresi Başkanlığı tarafından PDF formatında verilen/indirilen vergi levhalarından bilgileri yapılandırılmış (structured) olarak çıkaran bir Golang kütüphanesi.
+
+A Go library for extracting structured data from Turkish tax plate (Vergi Levhası) PDF documents.
+
+---
+
+**[Türkçe](#türkçe)** | **[English](#english)**
+
+---
+
+## Türkçe
 
 ## Özellikler
 
@@ -86,13 +100,15 @@ result, err := parser.ParseFile("vergi-levhasi.pdf")
 
 ## Örnek Çıktı
 
+> **Not:** Aşağıdaki veriler tamamen hayalidir ve yalnızca örnek amaçlıdır.
+
 ```json
 {
-  "adi_soyadi": "Ahmet Yılmaz",
+  "adi_soyadi": "Ali Örnek",
   "vergi_kimlik_no": "1234567890",
-  "tc_kimlik_no": "12345678901",
-  "vergi_dairesi": "İstanbul Vergi Dairesi",
-  "is_yeri_adresi": "Kadıköy Mahallesi, İstanbul",
+  "tc_kimlik_no": "11111111110",
+  "vergi_dairesi": "Örnek Vergi Dairesi",
+  "is_yeri_adresi": "Örnek Mah. Test Cad. No:1, Ankara",
   "ise_baslama_tarihi": "2020-01-15T00:00:00Z",
   "vergi_turu": [
     "Gelir Vergisi",
@@ -177,29 +193,196 @@ type Matrah struct {
 ## Test
 
 ```bash
+# Run basic tests
 go test -v
+
+# Run tests with OCR features
+go test -v -tags ocr
+
+# Run tests with coverage
+go test -v -cover
 ```
 
 ## Örnek Uygulama
 
-Proje içinde örnek bir uygulama bulunmaktadır:
+Proje içinde örnek uygulamalar bulunmaktadır:
 
 ```bash
-go run example/main.go path/to/vergi-levhasi.pdf
+# Basit örnek (OCR olmadan)
+go run example/simple/main.go path/to/vergi-levhasi.pdf
+
+# OCR destekli örnek
+go run -tags ocr example/main.go path/to/vergi-levhasi.pdf
 ```
 
 ## Bağımlılıklar
 
-- [github.com/unidoc/unipdf/v3](https://github.com/unidoc/unipdf) - PDF işleme kütüphanesi
+- [github.com/ledongthuc/pdf](https://github.com/ledongthuc/pdf) - PDF metin çıkarma kütüphanesi
 
 ## Lisans
 
-MIT
+MIT License - Detaylar için [LICENSE](LICENSE) dosyasına bakın.
 
 ## Katkıda Bulunma
 
-Pull request'ler kabul edilmektedir. Büyük değişiklikler için lütfen önce bir issue açarak ne değiştirmek istediğinizi tartışın.
+Katkılarınızı bekliyoruz! Detaylar için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasına bakın.
+
+**Önemli:** Gerçek vergi levhası PDF'lerini veya kişisel verileri repository'ye eklemeyin. Test verileri için yalnızca hayali/sahte veriler kullanın.
 
 ## Not
 
 Bu kütüphane, Gelir İdaresi Başkanlığı'nın PDF formatındaki vergi levhalarından bilgi çıkarmak için regex tabanlı bir yaklaşım kullanır. PDF formatı değişiklik gösterebileceğinden, tüm vergi levhası formatları ile tam uyumlu olmayabilir. Farklı formatlarla karşılaşırsanız, lütfen bir issue açın veya pull request gönderin.
+
+### Bilinen Sınırlamalar
+
+- **Vergi Kimlik No (VKN)**: Bazı GİB PDF'lerinde VKN, barkod fontları ile veya barkod görseli içinde render edildiğinden metin olarak çıkarılamayabilir. Bu durumlarda VKN alanı boş kalabilir. VKN'yi çıkarmak için OCR kullanabilirsiniz (aşağıya bakın).
+- **Türkçe Karakter Sorunları**: PDF'den metin çıkarma sırasında bazı Türkçe karakterler (Ö, Ü, İ, vb.) eksik veya hatalı çıkabilir. Bu, PDF kütüphanesinin sınırlamalarından kaynaklanmaktadır.
+
+## OCR ile Vergi Kimlik No Çıkarma
+
+Bazı GİB PDF'lerinde VKN barkod görseli olarak render edildiğinden normal metin çıkarma ile elde edilemez. Bu durumda OCR (Optik Karakter Tanıma) kullanabilirsiniz.
+
+### Sıfır Bağımlılık (Zero Dependencies)
+
+OCR özelliği tamamen saf Go ile yazılmıştır ve **hiçbir harici bağımlılık gerektirmez**:
+- ❌ ONNX Runtime gerekmez
+- ❌ TensorFlow gerekmez
+- ❌ Tesseract gerekmez
+- ❌ Harici araç gerekmez
+
+### Kullanım
+
+```go
+// Build: go build -tags ocr .
+
+package main
+
+import (
+    "fmt"
+    "log"
+
+    vergilevhasi "github.com/alparslanahmed/vergilevhasi-parser-go"
+)
+
+func main() {
+    // OCR parser oluştur (hiçbir parametre gerekmez!)
+    parser, err := vergilevhasi.NewOCRParser()
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer parser.Close()
+
+    // Görsel dosyasından VKN çıkar
+    vkn, err := parser.ExtractVKNFromImage("vergi-levhasi.png")
+    if err != nil {
+        log.Printf("OCR hatası: %v", err)
+    } else {
+        fmt.Printf("Vergi Kimlik No: %s\n", vkn)
+    }
+}
+```
+
+### Build
+
+```bash
+# OCR özelliği ile derle
+go build -tags ocr .
+
+# Örneği çalıştır
+go run -tags ocr example/main.go path/to/vergi-levhasi.pdf
+```
+
+### Desteklenen Formatlar
+
+- **PNG**: Doğrudan işlenir
+- **JPG/JPEG**: Doğrudan işlenir
+- **PDF**: Otomatik olarak görsele çevrilir
+
+### En İyi Sonuçlar İçin
+
+1. **Görsel kalitesi**: Yüksek çözünürlüklü, net görsel kullanın
+2. **Kontrast**: Siyah metin, beyaz arka plan tercih edilir
+3. **Kırpma**: Sadece VKN numarasını içeren bölgeyi kırpın
+4. **Eğim**: Görsel düz olmalı, eğik olmamalı
+
+### Nasıl Çalışır
+
+OCR modülü şu adımları izler:
+
+1. **Gri tonlamaya çevirme**: Renk bilgisi kaldırılır
+2. **Adaptif binarizasyon**: Görsel siyah-beyaza dönüştürülür
+3. **Bağlı bileşen analizi**: Her rakam ayrı ayrı tespit edilir
+4. **Özellik çıkarma**: Her rakam için geometrik özellikler hesaplanır
+5. **Sınıflandırma**: Özellikler kullanılarak rakam tanınır
+6. **VKN deseni arama**: 10 haneli numara bulunur
+
+**Not:** Bu saf Go implementasyonu, MNIST tabanlı sinir ağı modellerine göre daha düşük doğruluğa sahip olabilir. En iyi sonuçlar için görsel kalitesine dikkat edin.
+
+**Not:** OCR özelliği opsiyoneldir. Temel PDF metin çıkarma için OCR gerekli değildir.
+
+---
+
+## English
+
+### Features
+
+This library can extract the following information from tax plate PDFs:
+
+- **Full Name (Adı Soyadı)** - For individual taxpayers
+- **Trade Name (Ticaret Ünvanı)** - For companies
+- **Business Address (İş Yeri Adresi)**
+- **Tax Types (Vergi Türü)** - Income Tax, VAT, etc.
+- **Activity Codes (Faaliyet Kodları)** - NACE activity codes and descriptions
+- **Tax Office (Vergi Dairesi)**
+- **Tax ID Number (Vergi Kimlik No - VKN)**
+- **Turkish ID Number (TC Kimlik No)** - For individuals
+- **Business Start Date (İşe Başlama Tarihi)**
+- **Historical Tax Bases (Geçmiş Matrahlar)**
+
+### Installation
+
+```bash
+go get github.com/alparslanahmed/vergilevhasi-parser-go
+```
+
+### Quick Start
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "log"
+
+    vergilevhasi "github.com/alparslanahmed/vergilevhasi-parser-go"
+)
+
+func main() {
+    parser := vergilevhasi.NewParser()
+    
+    result, err := parser.ParseFile("vergi-levhasi.pdf")
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    jsonData, _ := json.MarshalIndent(result, "", "  ")
+    fmt.Println(string(jsonData))
+}
+```
+
+### OCR Support
+
+Some GİB PDFs encode the VKN as a barcode image rather than text. For these cases, use the OCR parser:
+
+```bash
+go build -tags ocr .
+```
+
+```go
+parser, _ := vergilevhasi.NewOCRParser()
+defer parser.Close()
+vkn, err := parser.ExtractVKNFromPDF("vergi-levhasi.pdf")
+```
+
+See the [Türkçe section](#ocr-ile-vergi-kimlik-no-çıkarma) for detailed OCR documentation.
