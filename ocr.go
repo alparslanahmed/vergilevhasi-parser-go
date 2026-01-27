@@ -380,7 +380,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 			firstImg := images[0]
 			if p.debug {
 				fmt.Printf("Scanning first image (VKN barcode): %dx%d\n", firstImg.Bounds().Dx(), firstImg.Bounds().Dy())
-				saveImage(firstImg, "debug_vkn_barcode_image.png")
+				err := saveImage(firstImg, "debug_vkn_barcode_image.png")
+				if err != nil {
+					return "", err
+				}
 			}
 
 			// Try Code128 barcode scan on the first image (VKN barcode is Code128)
@@ -396,7 +399,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 				upscaled := p.upscaleImage(firstImg, 4) // 4x upscale for better barcode reading
 				if p.debug {
 					fmt.Printf("Upscaled barcode image to: %dx%d\n", upscaled.Bounds().Dx(), upscaled.Bounds().Dy())
-					saveImage(upscaled, "debug_vkn_barcode_upscaled.png")
+					err := saveImage(upscaled, "debug_vkn_barcode_upscaled.png")
+					if err != nil {
+						return "", err
+					}
 				}
 				if vkn, err := p.scanCode128Barcode(upscaled); err == nil && vkn != "" {
 					return vkn, nil
@@ -411,7 +417,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 			}
 			if p.debug {
 				fmt.Printf("Scanning embedded image %d: %dx%d\n", i+1, img.Bounds().Dx(), img.Bounds().Dy())
-				saveImage(img, fmt.Sprintf("debug_embedded_image_%d.png", i+1))
+				err := saveImage(img, fmt.Sprintf("debug_embedded_image_%d.png", i+1))
+				if err != nil {
+					return "", err
+				}
 			}
 
 			// Try direct barcode scan
@@ -423,7 +432,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 			if img.Bounds().Dx() < 500 || img.Bounds().Dy() < 200 {
 				upscaled := p.upscaleImage(img, 3)
 				if p.debug {
-					saveImage(upscaled, fmt.Sprintf("debug_embedded_image_%d_upscaled.png", i+1))
+					err := saveImage(upscaled, fmt.Sprintf("debug_embedded_image_%d_upscaled.png", i+1))
+					if err != nil {
+						return "", err
+					}
 				}
 				if vkn, err := p.scanBarcode(upscaled); err == nil && vkn != "" {
 					return vkn, nil
@@ -442,7 +454,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 
 	if p.debug {
 		fmt.Printf("PDF page converted to image: %dx%d\n", img.Bounds().Dx(), img.Bounds().Dy())
-		saveImage(img, "debug_pdf_page.png")
+		err := saveImage(img, "debug_pdf_page.png")
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// If the image is too small, upscale it for better barcode scanning
@@ -450,7 +465,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 		upscaled := p.upscaleImage(img, 3) // 3x upscale
 		if p.debug {
 			fmt.Printf("Upscaled image to: %dx%d\n", upscaled.Bounds().Dx(), upscaled.Bounds().Dy())
-			saveImage(upscaled, "debug_pdf_page_upscaled.png")
+			err := saveImage(upscaled, "debug_pdf_page_upscaled.png")
+			if err != nil {
+				return "", err
+			}
 		}
 		img = upscaled
 	}
@@ -464,7 +482,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 	barcodeImg := p.cropBarcodeArea(img)
 	if barcodeImg != nil {
 		if p.debug {
-			saveImage(barcodeImg, "debug_barcode_crop.png")
+			err := saveImage(barcodeImg, "debug_barcode_crop.png")
+			if err != nil {
+				return "", err
+			}
 		}
 		if vkn, err := p.scanBarcode(barcodeImg); err == nil && vkn != "" {
 			return vkn, nil
@@ -479,7 +500,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 			continue
 		}
 		if p.debug {
-			saveImage(cropped, fmt.Sprintf("debug_barcode_region_%d.png", i))
+			err := saveImage(cropped, fmt.Sprintf("debug_barcode_region_%d.png", i))
+			if err != nil {
+				return "", err
+			}
 		}
 		if vkn, err := p.scanBarcode(cropped); err == nil && vkn != "" {
 			return vkn, nil
@@ -495,7 +519,10 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 	vknArea := p.cropVKNTextArea(img)
 	if vknArea != nil {
 		if p.debug {
-			saveImage(vknArea, "debug_vkn_text_area.png")
+			err := saveImage(vknArea, "debug_vkn_text_area.png")
+			if err != nil {
+				return "", err
+			}
 		}
 		if vkn, err := p.ExtractVKNFromImageData(vknArea); err == nil && vkn != "" {
 			return vkn, nil
@@ -716,8 +743,8 @@ func looksLikeAddressNumber(vkn string, fullText string) bool {
 	return false
 }
 
-// min returns the smaller of two integers
-func min(a, b int) int {
+// minNum returns the smaller of two integers
+func minNum(a, b int) int {
 	if a < b {
 		return a
 	}
@@ -730,7 +757,12 @@ func (p *OCRParser) ExtractVKNFromImage(imagePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open image: %w", err)
 	}
-	defer imgFile.Close()
+	defer func(imgFile *os.File) {
+		err := imgFile.Close()
+		if err != nil {
+			fmt.Printf("failed to close image file: %v\n", err)
+		}
+	}(imgFile)
 
 	img, _, err := image.Decode(imgFile)
 	if err != nil {
@@ -764,14 +796,20 @@ func (p *OCRParser) ExtractVKNFromImageData(img image.Image) (string, error) {
 	grayImg := toGrayscale(img)
 
 	if p.debug {
-		saveImage(grayImg, "debug_01_grayscale.png")
+		err := saveImage(grayImg, "debug_01_grayscale.png")
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// Step 2: Binarize with adaptive threshold
 	binaryImg := adaptiveBinarize(grayImg, 15, 10)
 
 	if p.debug {
-		saveImage(binaryImg, "debug_02_binary.png")
+		err := saveImage(binaryImg, "debug_02_binary.png")
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// Step 3: Find connected components (potential digits)
@@ -803,7 +841,10 @@ func (p *OCRParser) ExtractVKNFromImageData(img image.Image) (string, error) {
 		if p.debug {
 			fmt.Printf("Region %d at (%d,%d): digit=%d, confidence=%.2f\n",
 				i, region.Min.X, region.Min.Y, digit, confidence)
-			saveImage(digitImg, fmt.Sprintf("debug_digit_%02d.png", i))
+			err := saveImage(digitImg, fmt.Sprintf("debug_digit_%02d.png", i))
+			if err != nil {
+				return "", err
+			}
 		}
 
 		if confidence >= 0.3 {
@@ -1729,7 +1770,12 @@ func saveImage(img image.Image, filename string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+			fmt.Printf("Failed to close file %s: %v\n", filename, err)
+		}
+	}(f)
 	return png.Encode(f, img)
 }
 
