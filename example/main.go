@@ -38,25 +38,6 @@ func main() {
 		log.Fatalf("Failed to parse PDF: %v", err)
 	}
 
-	fmt.Println(result.VergiKimlikNo)
-	// If VKN was not found via text extraction, try barcode scanning with OCR
-	if result.VergiKimlikNo == "" {
-		fmt.Println("VKN not found in text, attempting OCR extraction...")
-		ocrParser, err := vergilevhasi.NewOCRParser()
-		if err != nil {
-			log.Printf("Warning: Could not create OCR parser: %v", err)
-		} else {
-			defer ocrParser.Close()
-			vkn, err := ocrParser.ExtractVKNFromPDFWithImage(pdfPath)
-			if err == nil && vkn != "" {
-				result.VergiKimlikNo = vkn
-				fmt.Printf("VKN extracted via OCR: %s\n\n", vkn)
-			} else if err != nil {
-				log.Printf("OCR extraction failed: %v", err)
-			}
-		}
-	}
-
 	// Print the results as JSON
 	jsonData, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {

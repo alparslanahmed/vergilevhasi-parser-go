@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -88,13 +89,25 @@ func (p *Parser) Parse(reader io.ReadSeeker) (*VergiLevhasi, error) {
 		rawText.WriteString("\n")
 	}
 
-	// Try to extract VKN from raw PDF data (sometimes it's encoded differently)
-	vknFromRaw := p.extractVKNFromRawPDF(data)
-
 	// Combine extraction methods
 	combinedText := rawText.String()
-	if vknFromRaw != "" {
-		combinedText += "\nVergi Kimlik No: " + vknFromRaw
+	ocrParser, err := NewOCRParser()
+	if err != nil {
+		log.Printf("Warning: Could not create OCR parser: %v", err)
+	} else {
+		defer func(ocrParser *OCRParser) {
+			err := ocrParser.Close()
+			if err != nil {
+				log.Printf("Warning: Could not close OCR parser: %v", err)
+			}
+		}(ocrParser)
+		vkn, err := ocrParser.ExtractVKNFromPDFWithImage(data)
+		if err == nil && vkn != "" {
+			combinedText += "\nVKN: " + vkn + "\n"
+			fmt.Printf("VKN extracted via OCR: %s\n\n", vkn)
+		} else if err != nil {
+			log.Printf("OCR extraction failed: %v", err)
+		}
 	}
 
 	if p.debug {
@@ -374,120 +387,6 @@ func decodeUTF16BE(data []byte) string {
 	return result.String()
 }
 
-// extractVKNFromRawPDF searches for 10-digit VKN patterns in raw PDF data
-func (p *Parser) extractVKNFromRawPDF(data []byte) string {
-	// Convert to string for pattern matching
-	rawStr := string(data)
-
-	// Collect all 10-digit candidates
-	var candidates []string
-
-	// Look for 10-digit numbers in parentheses (PDF string literals)
-	vknRe := regexp.MustCompile(`\((\d{10})\)`)
-	matches := vknRe.FindAllStringSubmatch(rawStr, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			vkn := match[1]
-			if vkn[0] != '0' && !isLikelyAddressPart(vkn, rawStr) && !isLikelyDate(vkn) {
-				candidates = append(candidates, vkn)
-			}
-		}
-	}
-
-	// Also look for standalone 10-digit numbers
-	// But be careful not to match concatenated address numbers
-	vknRe2 := regexp.MustCompile(`(?:^|[^\d])(\d{10})(?:[^\d]|$)`)
-	matches2 := vknRe2.FindAllStringSubmatch(rawStr, -1)
-	for _, match := range matches2 {
-		if len(match) > 1 {
-			vkn := match[1]
-			if vkn[0] != '0' && !isLikelyAddressPart(vkn, rawStr) && !isLikelyDate(vkn) {
-				// Check if already in candidates
-				found := false
-				for _, c := range candidates {
-					if c == vkn {
-						found = true
-						break
-					}
-				}
-				if !found {
-					candidates = append(candidates, vkn)
-				}
-			}
-		}
-	}
-
-	// Return the first valid candidate
-	if len(candidates) > 0 {
-		return candidates[0]
-	}
-
-	return ""
-}
-
-// isLikelyAddressPart checks if the 10-digit number is likely constructed from address parts
-func isLikelyAddressPart(vkn string, context string) bool {
-	// Check if the context contains address patterns that could form this VKN
-	addressMarkers := []string{"NO:", "MAH", "SK.", "CAD.", "KAPI", "SOK"}
-	addressMarkerCount := 0
-	for _, marker := range addressMarkers {
-		if strings.Contains(context, marker) {
-			addressMarkerCount++
-		}
-	}
-
-	// If context has many address markers, be suspicious
-	if addressMarkerCount >= 3 {
-		// Check if individual digits from VKN appear near address markers
-		// For example "858 SK. NO: 9 İÇ KAPI NO: 706" -> 8589706...
-		for i := 0; i < 3 && i < len(vkn); i++ {
-			digit := string(vkn[i])
-			// If first few digits appear right after "NO:" pattern, it might be address-derived
-			noPattern := regexp.MustCompile(`NO\s*:\s*` + digit)
-			if noPattern.MatchString(context) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// isLikelyDate checks if a 10-digit string looks like a date pattern
-func isLikelyDate(s string) bool {
-	if len(s) != 10 {
-		return false
-	}
-
-	// Check DDMMYYYY pattern (first 8 digits)
-	day := s[0:2]
-	month := s[2:4]
-	year := s[4:8]
-
-	d, _ := strconv.Atoi(day)
-	m, _ := strconv.Atoi(month)
-	y, _ := strconv.Atoi(year)
-
-	if d >= 1 && d <= 31 && m >= 1 && m <= 12 && y >= 1900 && y <= 2100 {
-		return true
-	}
-
-	// Check YYYYMMDD pattern
-	year = s[0:4]
-	month = s[4:6]
-	day = s[6:8]
-
-	y, _ = strconv.Atoi(year)
-	m, _ = strconv.Atoi(month)
-	d, _ = strconv.Atoi(day)
-
-	if y >= 1900 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31 {
-		return true
-	}
-
-	return false
-}
-
 // parseContent extracts structured data from the raw text
 func (p *Parser) parseContent(vl *VergiLevhasi, text string) {
 	// Parse using position-based extraction for the GIB PDF format
@@ -643,7 +542,7 @@ func (p *Parser) parseContent(vl *VergiLevhasi, text string) {
 	// Extract Vergi Dairesi - GIB format: look for known tax office names
 	if vl.VergiDairesi == "" {
 		knownTaxOffices := []string{
-			"KAĞITHANE", "KAGITHANE", "ŞİŞLİ", "SISLI", "KADIKÖY", "KADIKOY",
+			"KAĞITHANE", "ŞİŞLİ", "SISLI", "KADIKÖY", "KADIKOY",
 			"ÜSKÜDAR", "USKUDAR", "BEŞİKTAŞ", "BESIKTAS", "BEYOĞLU", "BEYOGLU",
 			"BAKIRKÖY", "BAKIRKOY", "FATİH", "FATIH", "MALTEPE", "KARTAL",
 			"ANKARA", "İZMİR", "IZMIR", "BURSA", "ANTALYA", "KONYA",
@@ -784,8 +683,6 @@ func (p *Parser) parseGIBFormat(vl *VergiLevhasi, text string, containsAny func(
 		}
 	}
 
-	// Extract address - from "XXX MAH" to "İSTANBUL" (or other cities)
-	// Pattern: KUŞTEPE MAH. MECİDİYEKÖY YOLU CAD. TRUMP TOWER NO: 12 İÇ KAPI NO: 221 ŞİŞLİ/ İSTANBUL
 	addrRe := regexp.MustCompile(`([A-ZÇĞİÖŞÜ]+\s+MAH\.?\s+.+?(?:İSTANBUL|ISTANBUL|ANKARA|İZMİR|IZMIR|BURSA|ANTALYA|KONYA))`)
 	if matches := addrRe.FindStringSubmatch(text); len(matches) > 1 {
 		addr := strings.TrimSpace(matches[1])
