@@ -1,13 +1,3 @@
-/*
-Simple example demonstrating basic usage of vergilevhasi-parser-go library.
-
-This example shows how to parse a Turkish tax plate (Vergi Levhası) PDF file
-and extract structured data without OCR features.
-
-Usage:
-
-	go run example/simple/main.go <path-to-pdf>
-*/
 package main
 
 import (

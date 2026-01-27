@@ -1,6 +1,3 @@
-//go:build ocr
-// +build ocr
-
 /*
 Package vergilevhasi OCR module provides digit recognition for VKN extraction.
 
@@ -42,13 +39,11 @@ import (
 	_ "image/jpeg"
 
 	"github.com/makiuchi-d/gozxing"
-	"github.com/makiuchi-d/gozxing/multi"
 	"github.com/makiuchi-d/gozxing/oned"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/sunshineplan/imgconv"
-	pdf2 "github.com/sunshineplan/pdf"
 )
 
 // OCRParser provides OCR capabilities for VKN extraction
@@ -264,7 +259,7 @@ func (p *OCRParser) extractVKNWithImgconv(pdfPath string) (string, error) {
 	return p.ExtractVKNFromPDFReaderWithImage(bytes.NewReader(pdfData))
 }
 
-// extractAllPDFImages extracts all images embedded in a PDF using sunshineplan/pdf
+// extractAllPDFImages extracts all images embedded in a PDF using pdfcpu's native extraction
 func (p *OCRParser) extractAllPDFImages(pdfData []byte) (images []image.Image, err error) {
 	// Recover from any panics in pdfcpu
 	defer func() {
@@ -274,12 +269,181 @@ func (p *OCRParser) extractAllPDFImages(pdfData []byte) (images []image.Image, e
 		}
 	}()
 
-	// Use DecodeAll which returns all images from the PDF
-	images, err = pdf2.DecodeAll(bytes.NewReader(pdfData))
+	// Create a reader from the data
+	rs := bytes.NewReader(pdfData)
+
+	// Create pdfcpu configuration
+	conf := model.NewDefaultConfiguration()
+
+	// Read, validate and optimize the PDF
+	ctx, err := api.ReadValidateAndOptimize(rs, conf)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode PDF images: %w", err)
+		return nil, fmt.Errorf("failed to read PDF: %w", err)
 	}
+
+	// Extract images from all pages using pdfcpu's native ExtractPageImages
+	for pageNr := 1; pageNr <= ctx.PageCount; pageNr++ {
+		pageImages, err := pdfcpu.ExtractPageImages(ctx, pageNr, false)
+		if err != nil {
+			if p.debug {
+				fmt.Printf("Failed to extract images from page %d: %v\n", pageNr, err)
+			}
+			continue
+		}
+
+		for objNr, pdfImage := range pageImages {
+			// Decode the image from the pdfcpu Image reader
+			img, err := p.decodePDFCPUImage(pdfImage)
+			if err != nil {
+				if p.debug {
+					fmt.Printf("Failed to decode image obj %d: %v\n", objNr, err)
+				}
+				continue
+			}
+			images = append(images, img)
+		}
+	}
+
+	if len(images) == 0 {
+		return nil, fmt.Errorf("no images found in PDF")
+	}
+
 	return images, nil
+}
+
+// decodePDFCPUImage decodes a pdfcpu model.Image to a Go image.Image
+func (p *OCRParser) decodePDFCPUImage(pdfImage model.Image) (image.Image, error) {
+	// Read all data from the image reader
+	data, err := io.ReadAll(pdfImage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read image data: %w", err)
+	}
+
+	// Create a reader from the data
+	reader := bytes.NewReader(data)
+
+	// Try to decode based on the FileType
+	fileType := strings.ToLower(pdfImage.FileType)
+
+	switch fileType {
+	case "png":
+		return png.Decode(reader)
+	case "jpg", "jpeg":
+		return decodeJPEG(reader)
+	case "gif":
+		return decodeGIF(reader)
+	default:
+		// Try standard image.Decode which handles registered formats
+		img, _, err := image.Decode(reader)
+		if err != nil {
+			// If standard decode fails, try to decode as raw image data
+			return p.decodeRawImageData(data, pdfImage)
+		}
+		return img, nil
+	}
+}
+
+// decodeJPEG decodes JPEG image data
+func decodeJPEG(r io.Reader) (image.Image, error) {
+	// image/jpeg is already registered via _ "image/jpeg" import
+	img, _, err := image.Decode(r)
+	return img, err
+}
+
+// decodeGIF decodes GIF image data
+func decodeGIF(r io.Reader) (image.Image, error) {
+	// image/gif is already registered via _ "image/gif" import
+	img, _, err := image.Decode(r)
+	return img, err
+}
+
+// decodeRawImageData attempts to decode raw image data based on PDF image properties
+func (p *OCRParser) decodeRawImageData(data []byte, pdfImage model.Image) (image.Image, error) {
+	width := pdfImage.Width
+	height := pdfImage.Height
+	bpc := pdfImage.Bpc   // bits per component
+	comp := pdfImage.Comp // number of color components
+
+	if width <= 0 || height <= 0 {
+		return nil, fmt.Errorf("invalid image dimensions: %dx%d", width, height)
+	}
+
+	// Calculate expected data size
+	expectedSize := width * height * comp * bpc / 8
+	if len(data) < expectedSize {
+		// Try image.Decode as fallback
+		img, _, err := image.Decode(bytes.NewReader(data))
+		if err == nil {
+			return img, nil
+		}
+		return nil, fmt.Errorf("data size mismatch: got %d, expected %d", len(data), expectedSize)
+	}
+
+	// Create image based on color space
+	switch {
+	case pdfImage.Cs == "DeviceGray" || comp == 1:
+		// Grayscale image
+		img := image.NewGray(image.Rect(0, 0, width, height))
+		if bpc == 8 {
+			copy(img.Pix, data[:width*height])
+		} else if bpc == 1 {
+			// 1-bit image (black and white)
+			for y := 0; y < height; y++ {
+				for x := 0; x < width; x++ {
+					byteIdx := (y*width + x) / 8
+					bitIdx := 7 - ((y*width + x) % 8)
+					if byteIdx < len(data) {
+						bit := (data[byteIdx] >> bitIdx) & 1
+						if bit == 0 {
+							img.SetGray(x, y, color.Gray{0}) // black
+						} else {
+							img.SetGray(x, y, color.Gray{255}) // white
+						}
+					}
+				}
+			}
+		}
+		return img, nil
+
+	case pdfImage.Cs == "DeviceRGB" || comp == 3:
+		// RGB image
+		img := image.NewRGBA(image.Rect(0, 0, width, height))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				idx := (y*width + x) * 3
+				if idx+2 < len(data) {
+					img.SetRGBA(x, y, color.RGBA{data[idx], data[idx+1], data[idx+2], 255})
+				}
+			}
+		}
+		return img, nil
+
+	case pdfImage.Cs == "DeviceCMYK" || comp == 4:
+		// CMYK image - convert to RGBA
+		img := image.NewRGBA(image.Rect(0, 0, width, height))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				idx := (y*width + x) * 4
+				if idx+3 < len(data) {
+					c, m, yk, k := data[idx], data[idx+1], data[idx+2], data[idx+3]
+					// Convert CMYK to RGB
+					r := 255 - min(255, int(c)+int(k))
+					g := 255 - min(255, int(m)+int(k))
+					b := 255 - min(255, int(yk)+int(k))
+					img.SetRGBA(x, y, color.RGBA{uint8(r), uint8(g), uint8(b), 255})
+				}
+			}
+		}
+		return img, nil
+
+	default:
+		// Try standard decode as last resort
+		img, _, err := image.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("unsupported color space: %s with %d components", pdfImage.Cs, comp)
+		}
+		return img, nil
+	}
 }
 
 // upscaleImage upscales an image by the given factor using imgconv
@@ -375,14 +539,48 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 		return "", fmt.Errorf("failed to read PDF data: %w", err)
 	}
 
-	// First, try to extract all embedded images and scan each one
-	// This is more reliable as the VKN barcode is typically an embedded image
+	// First, try to extract all embedded images
+	// The FIRST image in the PDF contains the VKN barcode (Code128 format)
 	images, err := p.extractAllPDFImages(data)
 	if err == nil && len(images) > 0 {
 		if p.debug {
 			fmt.Printf("Found %d embedded images in PDF\n", len(images))
 		}
+
+		// The first image is the VKN barcode image - prioritize it
+		if len(images) > 0 {
+			firstImg := images[0]
+			if p.debug {
+				fmt.Printf("Scanning first image (VKN barcode): %dx%d\n", firstImg.Bounds().Dx(), firstImg.Bounds().Dy())
+				saveImage(firstImg, "debug_vkn_barcode_image.png")
+			}
+
+			// Try Code128 barcode scan on the first image (VKN barcode is Code128)
+			if vkn, err := p.scanCode128Barcode(firstImg); err == nil && vkn != "" {
+				if p.debug {
+					fmt.Printf("Successfully extracted VKN from first image barcode: %s\n", vkn)
+				}
+				return vkn, nil
+			}
+
+			// Try upscaling if the barcode image is small
+			if firstImg.Bounds().Dx() < 500 || firstImg.Bounds().Dy() < 100 {
+				upscaled := p.upscaleImage(firstImg, 4) // 4x upscale for better barcode reading
+				if p.debug {
+					fmt.Printf("Upscaled barcode image to: %dx%d\n", upscaled.Bounds().Dx(), upscaled.Bounds().Dy())
+					saveImage(upscaled, "debug_vkn_barcode_upscaled.png")
+				}
+				if vkn, err := p.scanCode128Barcode(upscaled); err == nil && vkn != "" {
+					return vkn, nil
+				}
+			}
+		}
+
+		// If first image didn't work, try remaining images
 		for i, img := range images {
+			if i == 0 {
+				continue // Already tried the first image
+			}
 			if p.debug {
 				fmt.Printf("Scanning embedded image %d: %dx%d\n", i+1, img.Bounds().Dx(), img.Bounds().Dy())
 				saveImage(img, fmt.Sprintf("debug_embedded_image_%d.png", i+1))
@@ -805,6 +1003,99 @@ func (p *OCRParser) ExtractVKNFromImageData(img image.Image) (string, error) {
 	return "", fmt.Errorf("no valid VKN found (recognized: %s)", digitStr)
 }
 
+// scanCode128Barcode attempts to decode a Code128 barcode specifically
+// The VKN barcode in Turkish tax plates is a Code128 barcode
+func (p *OCRParser) scanCode128Barcode(img image.Image) (string, error) {
+	// Try scanning with different image orientations
+	orientations := []int{0, 90, 180, 270}
+
+	for _, rotation := range orientations {
+		rotatedImg := img
+		if rotation > 0 {
+			rotatedImg = rotateImage(img, rotation)
+		}
+
+		// Try with original image
+		if vkn, err := p.scanCode128Only(rotatedImg); err == nil && vkn != "" {
+			return vkn, nil
+		}
+
+		// Try with enhanced contrast
+		enhanced := p.enhanceBarcode(rotatedImg)
+		if vkn, err := p.scanCode128Only(enhanced); err == nil && vkn != "" {
+			return vkn, nil
+		}
+	}
+
+	return "", fmt.Errorf("no Code128 barcode found")
+}
+
+// scanCode128Only scans image using only Code128 reader
+func (p *OCRParser) scanCode128Only(img image.Image) (string, error) {
+	// Convert image to BinaryBitmap for gozxing
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "", fmt.Errorf("failed to create bitmap: %w", err)
+	}
+
+	// Use Code128 reader specifically
+	reader := oned.NewCode128Reader()
+
+	result, err := reader.Decode(bmp, nil)
+	if err != nil {
+		return "", fmt.Errorf("Code128 decode failed: %w", err)
+	}
+
+	text := result.GetText()
+	if p.debug {
+		fmt.Printf("Code128 decoded: %s\n", text)
+	}
+
+	// Extract VKN from the barcode text
+	if vkn := p.extractVKNFromBarcodeText(text); vkn != "" {
+		return vkn, nil
+	}
+
+	// If the text itself is a 10-digit number starting with non-zero, use it
+	if len(text) == 10 && text[0] >= '1' && text[0] <= '9' {
+		allDigits := true
+		for _, ch := range text {
+			if ch < '0' || ch > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return text, nil
+		}
+	}
+
+	return "", fmt.Errorf("no VKN found in barcode text: %s", text)
+}
+
+// enhanceBarcode enhances the barcode image for better reading
+func (p *OCRParser) enhanceBarcode(img image.Image) image.Image {
+	bounds := img.Bounds()
+	enhanced := image.NewGray(bounds)
+
+	// Convert to high-contrast grayscale
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c := img.At(x, y)
+			gray := color.GrayModel.Convert(c).(color.Gray)
+
+			// Apply threshold to make barcode more distinct
+			if gray.Y > 128 {
+				enhanced.SetGray(x, y, color.Gray{255})
+			} else {
+				enhanced.SetGray(x, y, color.Gray{0})
+			}
+		}
+	}
+
+	return enhanced
+}
+
 // scanBarcode attempts to decode a barcode from the image
 func (p *OCRParser) scanBarcode(img image.Image) (string, error) {
 	// Try scanning with different image orientations
@@ -835,19 +1126,16 @@ func (p *OCRParser) scanBarcodeOrientation(img image.Image) (string, error) {
 	}
 
 	// First try MultiFormatReader which tries all formats
-	multiReader := multi.NewGenericMultipleBarcodeReader(
-		oned.NewMultiFormatOneDReader(nil),
-	)
-	results, err := multiReader.DecodeMultiple(bmp, nil)
-	if err == nil && len(results) > 0 {
-		for _, result := range results {
-			text := result.GetText()
-			if p.debug {
-				fmt.Printf("MultiReader decoded: %s\n", text)
-			}
-			if vkn := p.extractVKNFromBarcodeText(text); vkn != "" {
-				return vkn, nil
-			}
+	reader := oned.NewCode128Reader()
+
+	result, err := reader.Decode(bmp, nil)
+	if err == nil {
+		text := result.GetText()
+		if p.debug {
+			fmt.Printf("Reader decoded: %s\n", text)
+		}
+		if vkn := p.extractVKNFromBarcodeText(text); vkn != "" {
+			return vkn, nil
 		}
 	}
 

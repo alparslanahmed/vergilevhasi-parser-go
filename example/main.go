@@ -1,20 +1,3 @@
-//go:build ocr
-// +build ocr
-
-/*
-Example application demonstrating the usage of vergilevhasi-parser-go library.
-
-This example shows how to:
-1. Parse a Turkish tax plate (Vergi Levhası) PDF file
-2. Extract structured data from the PDF
-3. Use OCR to extract VKN if text extraction fails
-
-Usage:
-
-	go run -tags ocr example/main.go <path-to-pdf>
-
-Note: OCR features require the 'ocr' build tag.
-*/
 package main
 
 import (
@@ -23,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	vergilevhasi "github.com/alparslanahmed/vergilevhasi-parser-go"
+	"github.com/alparslanahmed/vergilevhasi-parser-go"
 )
 
 func main() {
@@ -55,6 +38,7 @@ func main() {
 		log.Fatalf("Failed to parse PDF: %v", err)
 	}
 
+	fmt.Println(result.VergiKimlikNo)
 	// If VKN was not found via text extraction, try barcode scanning with OCR
 	if result.VergiKimlikNo == "" {
 		fmt.Println("VKN not found in text, attempting OCR extraction...")
