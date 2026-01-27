@@ -596,52 +596,6 @@ func (p *OCRParser) pdfToImage(pdfPath string) (string, error) {
 	return "", fmt.Errorf("no PDF to image converter found")
 }
 
-// isSequential checks if digits are mostly sequential (like 123456...)
-func isSequential(s string) bool {
-	if len(s) < 5 {
-		return false
-	}
-	sequential := 0
-	for i := 1; i < len(s); i++ {
-		diff := int(s[i]) - int(s[i-1])
-		if diff == 1 || diff == -1 || diff == 0 {
-			sequential++
-		}
-	}
-	return sequential > len(s)*2/3 // More than 2/3 sequential
-}
-
-// hexToDigits converts a hex string to digit string
-func hexToDigits(hex string) string {
-	var result strings.Builder
-	for i := 0; i < len(hex); i += 2 {
-		if i+1 < len(hex) {
-			b := hexToByte(hex[i], hex[i+1])
-			if b >= '0' && b <= '9' {
-				result.WriteByte(b)
-			}
-		}
-	}
-	return result.String()
-}
-
-func hexToByte(h1, h2 byte) byte {
-	return hexDigit(h1)*16 + hexDigit(h2)
-}
-
-func hexDigit(h byte) byte {
-	switch {
-	case h >= '0' && h <= '9':
-		return h - '0'
-	case h >= 'A' && h <= 'F':
-		return h - 'A' + 10
-	case h >= 'a' && h <= 'f':
-		return h - 'a' + 10
-	default:
-		return 0
-	}
-}
-
 // looksLikeDate checks if a 10-digit string looks like a date pattern
 func looksLikeDate(s string) bool {
 	if len(s) != 10 {
@@ -691,64 +645,6 @@ func isValidYear(s string) bool {
 	}
 	y := int(s[0]-'0')*1000 + int(s[1]-'0')*100 + int(s[2]-'0')*10 + int(s[3]-'0')
 	return y >= 1900 && y <= 2100
-}
-
-// looksLikeAddressNumber checks if a 10-digit number appears to be constructed from
-// address parts (like "858 SK. NO: 9 İÇ KAPI NO: 706" -> "8589706...")
-func looksLikeAddressNumber(vkn string, fullText string) bool {
-	// Check if the VKN digits appear scattered in address-like patterns
-	// Address patterns typically have: MAH., SK., CAD., NO:, KAPI, etc.
-	addressPatterns := []string{
-		`NO\s*:\s*\d`,
-		`KAPI\s*NO`,
-		`SK\.\s*NO`,
-		`MAH\.\s*\d`,
-		`CAD\.\s*NO`,
-	}
-
-	addressPatternCount := 0
-	for _, pattern := range addressPatterns {
-		if matched, _ := regexp.MatchString(`(?i)`+pattern, fullText); matched {
-			addressPatternCount++
-		}
-	}
-
-	// If text has multiple address patterns, check if VKN digits are scattered
-	if addressPatternCount >= 2 {
-		// Extract all separate numbers from the text
-		numRe := regexp.MustCompile(`\b(\d{1,4})\b`)
-		numbers := numRe.FindAllString(fullText, -1)
-
-		// Check if VKN can be formed by concatenating small numbers (address numbers)
-		// This is a heuristic: if we can find 3+ small numbers that when concatenated
-		// form a prefix of the VKN, it's likely an address concatenation
-		var concat strings.Builder
-		matchCount := 0
-		for _, num := range numbers {
-			concat.WriteString(num)
-			if strings.HasPrefix(vkn, concat.String()) {
-				matchCount++
-			}
-			if concat.Len() >= 10 {
-				break
-			}
-		}
-
-		// If 3 or more small numbers concatenate to form the VKN, it's likely fake
-		if matchCount >= 3 && concat.String()[:min(10, concat.Len())] == vkn[:min(10, concat.Len())] {
-			return true
-		}
-	}
-
-	return false
-}
-
-// minNum returns the smaller of two integers
-func minNum(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // ExtractVKNFromImage extracts VKN from an image file
@@ -1719,15 +1615,6 @@ func abs(x int) int {
 		return -x
 	}
 	return x
-}
-
-// intPow calculates x^n for integers
-func intPow(x, n int) int {
-	result := 1
-	for i := 0; i < n; i++ {
-		result *= x
-	}
-	return result
 }
 
 func extractDigitImage(img *image.Gray, region image.Rectangle) *image.Gray {
