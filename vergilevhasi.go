@@ -44,11 +44,11 @@ import (
 
 // VergiLevhasi represents the structured data extracted from a Turkish tax plate PDF
 type VergiLevhasi struct {
-	// Adı Soyadı (Full Name) - for individuals
-	AdiSoyadi string `json:"adi_soyadi,omitempty"`
+	// Adı Soyadı (Full Name) - for individuals, can be empty
+	AdiSoyadi string `json:"adi_soyadi"`
 
-	// Ticaret Ünvanı (Trade Name) - for companies
-	TicaretUnvani string `json:"ticaret_unvani,omitempty"`
+	// Ticaret Ünvanı (Trade Name) - for companies, can be empty
+	TicaretUnvani string `json:"ticaret_unvani"`
 
 	// İş Yeri Adresi (Business Address)
 	IsYeriAdresi string `json:"is_yeri_adresi,omitempty"`

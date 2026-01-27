@@ -42,6 +42,7 @@ import (
 	_ "image/jpeg"
 
 	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/multi"
 	"github.com/makiuchi-d/gozxing/oned"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
@@ -176,44 +177,34 @@ func (p *OCRParser) ExtractVKNFromPDFReader(reader io.ReadSeeker) (string, error
 		}
 	}
 
-	// Try extracting digits from the text we already extracted
-	var allDigits strings.Builder
-	for _, ch := range text {
-		if ch >= '0' && ch <= '9' {
-			allDigits.WriteRune(ch)
-		}
+	// Try extracting VKN from text patterns (NOT by concatenating random digits)
+	// VKN typically appears as a standalone 10-digit number, often near "VERGİ KİMLİK" label
+	// or as a barcode number below the barcode
+
+	// Look for VKN pattern in original text (with proper word boundaries)
+	// This avoids concatenating unrelated numbers like address parts
+	vknPatterns := []string{
+		`VERGİ\s*KİMLİK\s*(?:NO|NUMARASI)?\s*[:\s]*(\d{10})`,
+		`VKN\s*[:\s]*(\d{10})`,
+		`(?:ONAY|BARKOD)\s*(?:KODU?)?\s*[:\s]*[A-Z0-9]*\s*(\d{10})`,
+		`\b([1-9]\d{9})\b`, // Standalone 10-digit number
 	}
 
-	// Check if we found any digits
-	digitStr := allDigits.String()
-	if p.debug {
-		fmt.Printf("Extracted digits from PDF content: %s\n", digitStr)
-	}
-
-	// Look for VKN pattern (10 digits starting with non-zero, not looking like a date)
-	// VKN candidates must NOT be part of a longer number sequence
-	re = regexp.MustCompile(`([1-9]\d{9})`)
-	matches := re.FindAllString(digitStr, -1)
-
-	var candidates []string
-	for _, match := range matches {
-		// Skip if it looks like a date (DDMMYYYY or similar)
-		if looksLikeDate(match) {
-			continue
+	for _, pattern := range vknPatterns {
+		re := regexp.MustCompile(`(?i)` + pattern)
+		if matches := re.FindStringSubmatch(text); len(matches) > 1 {
+			candidate := matches[1]
+			// Validate: 10 digits, starts with non-zero, not a date
+			if len(candidate) == 10 && candidate[0] >= '1' && candidate[0] <= '9' && !looksLikeDate(candidate) {
+				// Extra validation: should not be part of an address pattern (3-digit + space patterns)
+				if !looksLikeAddressNumber(candidate, text) {
+					if p.debug {
+						fmt.Printf("Found VKN in text pattern: %s\n", candidate)
+					}
+					return candidate, nil
+				}
+			}
 		}
-		// Skip if it looks like activity code + date (e.g., 621000 + date parts)
-		if strings.HasPrefix(match, "621") || strings.HasPrefix(match, "471") || strings.HasPrefix(match, "461") {
-			continue
-		}
-		// Skip if it's mostly sequential digits (unlikely for VKN)
-		if isSequential(match) {
-			continue
-		}
-		candidates = append(candidates, match)
-	}
-
-	if len(candidates) > 0 {
-		return candidates[0], nil
 	}
 
 	return "", fmt.Errorf("VKN not found in PDF text. The VKN in this PDF is likely embedded in the barcode image. Take a screenshot/crop of just the VKN number (the digits below the barcode) and use ExtractVKNFromImage()")
@@ -469,7 +460,40 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 		}
 	}
 
+	// Last resort: Try OCR on the VKN area (the numbers printed above/below the barcode)
+	// VKN is typically printed as visible text near the barcode
+	if p.debug {
+		fmt.Println("Barcode scanning failed, trying OCR on VKN area...")
+	}
+
+	vknArea := p.cropVKNTextArea(img)
+	if vknArea != nil {
+		if p.debug {
+			saveImage(vknArea, "debug_vkn_text_area.png")
+		}
+		if vkn, err := p.ExtractVKNFromImageData(vknArea); err == nil && vkn != "" {
+			return vkn, nil
+		}
+	}
+
 	return "", fmt.Errorf("could not extract VKN from PDF barcode")
+}
+
+// cropVKNTextArea crops the area where VKN number is typically printed
+// In Vergi Levhası, VKN appears as text near the barcode in the top-right section
+func (p *OCRParser) cropVKNTextArea(img image.Image) image.Image {
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+
+	// VKN text area: right side of document, upper portion where "VERGİ KİMLİK NO" section is
+	// Based on the standard layout: right 40%, top 40%
+	x0 := bounds.Min.X + int(float64(width)*0.55)
+	y0 := bounds.Min.Y + int(float64(height)*0.10)
+	x1 := bounds.Max.X - int(float64(width)*0.02)
+	y1 := bounds.Min.Y + int(float64(height)*0.35)
+
+	return p.cropImage(img, image.Rect(x0, y0, x1, y1))
 }
 
 // ExtractVKNFromPDFBytes extracts VKN from PDF bytes by converting to image and scanning barcode
@@ -616,6 +640,64 @@ func isValidYear(s string) bool {
 	return y >= 1900 && y <= 2100
 }
 
+// looksLikeAddressNumber checks if a 10-digit number appears to be constructed from
+// address parts (like "858 SK. NO: 9 İÇ KAPI NO: 706" -> "8589706...")
+func looksLikeAddressNumber(vkn string, fullText string) bool {
+	// Check if the VKN digits appear scattered in address-like patterns
+	// Address patterns typically have: MAH., SK., CAD., NO:, KAPI, etc.
+	addressPatterns := []string{
+		`NO\s*:\s*\d`,
+		`KAPI\s*NO`,
+		`SK\.\s*NO`,
+		`MAH\.\s*\d`,
+		`CAD\.\s*NO`,
+	}
+
+	addressPatternCount := 0
+	for _, pattern := range addressPatterns {
+		if matched, _ := regexp.MatchString(`(?i)`+pattern, fullText); matched {
+			addressPatternCount++
+		}
+	}
+
+	// If text has multiple address patterns, check if VKN digits are scattered
+	if addressPatternCount >= 2 {
+		// Extract all separate numbers from the text
+		numRe := regexp.MustCompile(`\b(\d{1,4})\b`)
+		numbers := numRe.FindAllString(fullText, -1)
+
+		// Check if VKN can be formed by concatenating small numbers (address numbers)
+		// This is a heuristic: if we can find 3+ small numbers that when concatenated
+		// form a prefix of the VKN, it's likely an address concatenation
+		var concat strings.Builder
+		matchCount := 0
+		for _, num := range numbers {
+			concat.WriteString(num)
+			if strings.HasPrefix(vkn, concat.String()) {
+				matchCount++
+			}
+			if concat.Len() >= 10 {
+				break
+			}
+		}
+
+		// If 3 or more small numbers concatenate to form the VKN, it's likely fake
+		if matchCount >= 3 && concat.String()[:min(10, concat.Len())] == vkn[:min(10, concat.Len())] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// min returns the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // ExtractVKNFromImage extracts VKN from an image file
 func (p *OCRParser) ExtractVKNFromImage(imagePath string) (string, error) {
 	imgFile, err := os.Open(imagePath)
@@ -725,36 +807,181 @@ func (p *OCRParser) ExtractVKNFromImageData(img image.Image) (string, error) {
 
 // scanBarcode attempts to decode a barcode from the image
 func (p *OCRParser) scanBarcode(img image.Image) (string, error) {
+	// Try scanning with different image orientations
+	// Sometimes barcodes need to be rotated for proper detection
+	orientations := []int{0, 90, 180, 270}
+
+	for _, rotation := range orientations {
+		rotatedImg := img
+		if rotation > 0 {
+			rotatedImg = rotateImage(img, rotation)
+		}
+
+		vkn, err := p.scanBarcodeOrientation(rotatedImg)
+		if err == nil && vkn != "" {
+			return vkn, nil
+		}
+	}
+
+	return "", fmt.Errorf("no barcode found")
+}
+
+// scanBarcodeOrientation scans barcode in a specific orientation
+func (p *OCRParser) scanBarcodeOrientation(img image.Image) (string, error) {
 	// Convert image to BinaryBitmap for gozxing
 	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
 	if err != nil {
 		return "", fmt.Errorf("failed to create bitmap: %w", err)
 	}
 
-	// Try Code128 reader first (commonly used for VKN barcodes in Turkey)
+	// First try MultiFormatReader which tries all formats
+	multiReader := multi.NewGenericMultipleBarcodeReader(
+		oned.NewMultiFormatOneDReader(nil),
+	)
+	results, err := multiReader.DecodeMultiple(bmp, nil)
+	if err == nil && len(results) > 0 {
+		for _, result := range results {
+			text := result.GetText()
+			if p.debug {
+				fmt.Printf("MultiReader decoded: %s\n", text)
+			}
+			if vkn := p.extractVKNFromBarcodeText(text); vkn != "" {
+				return vkn, nil
+			}
+		}
+	}
+
+	// Try individual readers
 	readers := []gozxing.Reader{
 		oned.NewCode128Reader(),
 		oned.NewCode39Reader(),
 		oned.NewEAN13Reader(),
+		oned.NewEAN8Reader(),
 		oned.NewITFReader(),
+		oned.NewCodaBarReader(),
+		oned.NewUPCAReader(),
+		oned.NewUPCEReader(),
 	}
+
+	var allDecodedTexts []string
 
 	for _, reader := range readers {
 		result, err := reader.Decode(bmp, nil)
 		if err == nil {
 			text := result.GetText()
 			if p.debug {
-				fmt.Printf("Barcode decoded: %s\n", text)
+				fmt.Printf("Barcode decoded with %T: %s\n", reader, text)
 			}
-			// Check if it's a valid VKN (10 digits starting with non-zero)
+			allDecodedTexts = append(allDecodedTexts, text)
+
+			if vkn := p.extractVKNFromBarcodeText(text); vkn != "" {
+				return vkn, nil
+			}
+		}
+	}
+
+	// If we decoded something but couldn't find VKN, try extracting digits
+	for _, text := range allDecodedTexts {
+		// Extract all digits from the decoded text
+		var digits strings.Builder
+		for _, ch := range text {
+			if ch >= '0' && ch <= '9' {
+				digits.WriteRune(ch)
+			}
+		}
+		digitStr := digits.String()
+		if len(digitStr) >= 10 {
+			// Try to find VKN pattern
 			re := regexp.MustCompile(`([1-9]\d{9})`)
-			if match := re.FindString(text); match != "" {
+			if match := re.FindString(digitStr); match != "" {
 				return match, nil
 			}
 		}
 	}
 
 	return "", fmt.Errorf("no barcode found")
+}
+
+// extractVKNFromBarcodeText extracts VKN from barcode decoded text
+func (p *OCRParser) extractVKNFromBarcodeText(text string) string {
+	// Check if it's a valid VKN (10 digits starting with non-zero)
+	re := regexp.MustCompile(`([1-9]\d{9})`)
+	matches := re.FindAllString(text, -1)
+	for _, match := range matches {
+		if isValidVKN(match) {
+			if p.debug {
+				fmt.Printf("Valid VKN found in barcode: %s\n", match)
+			}
+			return match
+		}
+	}
+
+	// If no valid VKN found via validation, still try to find 10-digit match
+	if match := re.FindString(text); match != "" {
+		return match
+	}
+
+	return ""
+}
+
+// rotateImage rotates an image by the specified degrees (90, 180, 270)
+func rotateImage(img image.Image, degrees int) image.Image {
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	var rotated *image.RGBA
+	switch degrees {
+	case 90:
+		rotated = image.NewRGBA(image.Rect(0, 0, h, w))
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				rotated.Set(h-1-y, x, img.At(bounds.Min.X+x, bounds.Min.Y+y))
+			}
+		}
+	case 180:
+		rotated = image.NewRGBA(image.Rect(0, 0, w, h))
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				rotated.Set(w-1-x, h-1-y, img.At(bounds.Min.X+x, bounds.Min.Y+y))
+			}
+		}
+	case 270:
+		rotated = image.NewRGBA(image.Rect(0, 0, h, w))
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				rotated.Set(y, w-1-x, img.At(bounds.Min.X+x, bounds.Min.Y+y))
+			}
+		}
+	default:
+		return img
+	}
+	return rotated
+}
+
+// isValidVKN validates a Turkish Tax Identification Number (Vergi Kimlik Numarası)
+// This performs basic structural validation
+func isValidVKN(vkn string) bool {
+	if len(vkn) != 10 {
+		return false
+	}
+	// VKN must start with a non-zero digit
+	if vkn[0] == '0' {
+		return false
+	}
+
+	// All characters must be digits
+	for _, ch := range vkn {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+
+	// VKN should not look like a date (DDMMYYYYXX or YYYYMMDDXX patterns)
+	if looksLikeDate(vkn) {
+		return false
+	}
+
+	return true
 }
 
 // ============================================================================
@@ -1130,7 +1357,7 @@ func countHoles(img *image.Gray) int {
 
 func calculateCrossings(img *image.Gray) float64 {
 	bounds := img.Bounds()
-	width, height := bounds.Dy(), bounds.Dy()
+	width, height := bounds.Dx(), bounds.Dy()
 
 	totalCrossings := 0
 	lines := 0
@@ -1335,6 +1562,15 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// intPow calculates x^n for integers
+func intPow(x, n int) int {
+	result := 1
+	for i := 0; i < n; i++ {
+		result *= x
+	}
+	return result
 }
 
 func extractDigitImage(img *image.Gray, region image.Rectangle) *image.Gray {

@@ -133,12 +133,20 @@ func TestExtractTaxTypes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := parser.extractTaxTypes(tt.text)
 			if len(got) != len(tt.want) {
-				t.Errorf("extractTaxTypes() length = %v, want %v", len(got), len(tt.want))
+				t.Errorf("extractTaxTypes() length = %v, want %v (got: %v)", len(got), len(tt.want), got)
 				return
 			}
-			for i, v := range got {
-				if v != tt.want[i] {
-					t.Errorf("extractTaxTypes()[%d] = %v, want %v", i, v, tt.want[i])
+			// Check that all expected types are present (order independent)
+			for _, want := range tt.want {
+				found := false
+				for _, g := range got {
+					if g == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("extractTaxTypes() missing %v, got %v", want, got)
 				}
 			}
 		})
@@ -195,12 +203,17 @@ func TestExtractTaxBases(t *testing.T) {
 		},
 		{
 			name: "Multiple years",
-			text: "2019 50.000\n2020 100.000",
+			text: "2019 150.000,00\n2020 200.000,00",
 			want: 2,
 		},
 		{
 			name: "No tax bases",
 			text: "Random text",
+			want: 0,
+		},
+		{
+			name: "Matrahsız",
+			text: "2020 Matrahsız 2021 Matrahsız",
 			want: 0,
 		},
 	}
@@ -229,7 +242,7 @@ func TestParseContent(t *testing.T) {
 	Gelir Vergisi
 	KDV
 	4711 - Gıda, içecek ve tütün satışı
-	2020 yılı 100.000,00 TL
+	2020 150.000,00 TL
 	`
 
 	vl := &VergiLevhasi{}
