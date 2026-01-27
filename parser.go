@@ -648,6 +648,30 @@ func (p *Parser) parseContent(vl *VergiLevhasi, text string) {
 		}
 		vl.GecmisMatra = validMatrahlar
 	}
+
+	isKurumsal := false
+	for _, vt := range vl.VergiTuru {
+		if strings.Contains(strings.ToLower(vt), "kurumlar") {
+			isKurumsal = true
+			break
+		}
+	}
+
+	if isKurumsal {
+		// Kurumsal: AdiSoyadi'ndaki değer aslında TicaretUnvani olmalı
+		if vl.AdiSoyadi != "" && vl.TicaretUnvani == "" {
+			vl.TicaretUnvani = vl.AdiSoyadi
+			vl.AdiSoyadi = ""
+		}
+	} else {
+		// Bireysel: TicaretUnvani boş olmalı (bireysel mükellefin ticaret unvanı yok)
+		// AdiSoyadi zaten doğru yerde
+		if vl.TicaretUnvani != "" && vl.AdiSoyadi == "" {
+			// Eğer sadece TicaretUnvani varsa ve bireysel ise, bu aslında isim
+			vl.AdiSoyadi = vl.TicaretUnvani
+			vl.TicaretUnvani = ""
+		}
+	}
 }
 
 // extractField extracts a field using multiple regex patterns
