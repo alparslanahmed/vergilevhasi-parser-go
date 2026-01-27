@@ -1,5 +1,6 @@
 # vergilevhasi-parser-go
 
+[![CI](https://github.com/alparslanahmed/vergilevhasi-parser-go/actions/workflows/go.yml/badge.svg)](https://github.com/alparslanahmed/vergilevhasi-parser-go/actions/workflows/go.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/alparslanahmed/vergilevhasi-parser-go.svg)](https://pkg.go.dev/github.com/alparslanahmed/vergilevhasi-parser-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/alparslanahmed/vergilevhasi-parser-go)](https://goreportcard.com/report/github.com/alparslanahmed/vergilevhasi-parser-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
