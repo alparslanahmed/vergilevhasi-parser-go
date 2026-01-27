@@ -29,8 +29,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -553,47 +551,6 @@ func (p *OCRParser) cropVKNTextArea(img image.Image) image.Image {
 // This uses github.com/sunshineplan/imgconv (pure Go, no external dependencies)
 func (p *OCRParser) ExtractVKNFromPDFBytes(pdfData []byte) (string, error) {
 	return p.ExtractVKNFromPDFReaderWithImage(bytes.NewReader(pdfData))
-}
-
-// pdfToImage converts a PDF to an image using external tools
-func (p *OCRParser) pdfToImage(pdfPath string) (string, error) {
-	tmpDir := os.TempDir()
-	baseName := filepath.Base(pdfPath)
-	baseName = strings.TrimSuffix(baseName, filepath.Ext(baseName))
-	outputPrefix := filepath.Join(tmpDir, "vkn_"+baseName)
-
-	// Try pdftoppm (poppler-utils)
-	if _, err := exec.LookPath("pdftoppm"); err == nil {
-		cmd := exec.Command("pdftoppm", "-png", "-f", "1", "-l", "1", "-r", "300", pdfPath, outputPrefix)
-		if err := cmd.Run(); err == nil {
-			for _, suffix := range []string{"-1.png", "-01.png", "-001.png"} {
-				outputPath := outputPrefix + suffix
-				if _, err := os.Stat(outputPath); err == nil {
-					return outputPath, nil
-				}
-			}
-		}
-	}
-
-	// Try ImageMagick
-	outputPath := outputPrefix + ".png"
-	for _, magickCmd := range []string{"magick", "convert"} {
-		if _, err := exec.LookPath(magickCmd); err == nil {
-			var cmd *exec.Cmd
-			if magickCmd == "magick" {
-				cmd = exec.Command(magickCmd, "convert", "-density", "300", pdfPath+"[0]", outputPath)
-			} else {
-				cmd = exec.Command(magickCmd, "-density", "300", pdfPath+"[0]", outputPath)
-			}
-			if err := cmd.Run(); err == nil {
-				if _, err := os.Stat(outputPath); err == nil {
-					return outputPath, nil
-				}
-			}
-		}
-	}
-
-	return "", fmt.Errorf("no PDF to image converter found")
 }
 
 // looksLikeDate checks if a 10-digit string looks like a date pattern
