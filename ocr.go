@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"io"
 	"math"
@@ -295,22 +294,6 @@ func (p *OCRParser) upscaleImage(img image.Image, factor int) image.Image {
 	}
 
 	return upscaled
-}
-
-// cropImage crops a rectangular region from an image
-func (p *OCRParser) cropImage(img image.Image, rect image.Rectangle) image.Image {
-	// Ensure rect is within bounds
-	bounds := img.Bounds()
-	rect = rect.Intersect(bounds)
-	if rect.Empty() {
-		return nil
-	}
-
-	// Create a new RGBA image for the cropped region
-	cropped := image.NewRGBA(image.Rect(0, 0, rect.Dx(), rect.Dy()))
-	draw.Draw(cropped, cropped.Bounds(), img, rect.Min, draw.Src)
-
-	return cropped
 }
 
 // ExtractVKNFromPDFReaderWithImage extracts VKN from a PDF reader by extracting embedded images
