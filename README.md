@@ -197,28 +197,23 @@ type Matrah struct {
 # Run basic tests
 go test -v
 
-# Run tests with OCR features
-go test -v -tags ocr
-
 # Run tests with coverage
 go test -v -cover
 ```
 
 ## Örnek Uygulama
 
-Proje içinde örnek uygulamalar bulunmaktadır:
+Proje içinde örnek uygulama bulunmaktadır:
 
 ```bash
-# Basit örnek (OCR olmadan)
-go run example/simple/main.go path/to/vergi-levhasi.pdf
-
-# OCR destekli örnek
-go run -tags ocr example/main.go path/to/vergi-levhasi.pdf
+# Örneği çalıştır
+go run example/main.go path/to/vergi-levhasi.pdf
 ```
 
 ## Bağımlılıklar
 
 - [github.com/pdfcpu/pdfcpu](https://github.com/pdfcpu/pdfcpu) - PDF işleme ve metin çıkarma kütüphanesi
+- [github.com/makiuchi-d/gozxing](https://github.com/makiuchi-d/gozxing) - Barkod tarama kütüphanesi (VKN çıkarma için)
 
 ## Lisans
 
@@ -254,8 +249,6 @@ OCR özelliği tamamen saf Go ile yazılmıştır ve **hiçbir harici bağımlı
 ### Kullanım
 
 ```go
-// Build: go build -tags ocr .
-
 package main
 
 import (
@@ -276,7 +269,7 @@ func main() {
     // Görsel dosyasından VKN çıkar
     vkn, err := parser.ExtractVKNFromImage("vergi-levhasi.png")
     if err != nil {
-        log.Printf("OCR hatası: %v", err)
+        log.Printf("OCR hatası: %v", err), err)
     } else {
         fmt.Printf("Vergi Kimlik No: %s\n", vkn)
     }
@@ -286,11 +279,11 @@ func main() {
 ### Build
 
 ```bash
-# OCR özelliği ile derle
-go build -tags ocr .
+# Normal build (OCR is included by default)
+go build .
 
 # Örneği çalıştır
-go run -tags ocr example/main.go path/to/vergi-levhasi.pdf
+go run example/main.go path/to/vergi-levhasi.pdf
 ```
 
 ### Desteklenen Formatlar
@@ -376,14 +369,12 @@ func main() {
 
 Some GİB PDFs encode the VKN as a barcode image rather than text. For these cases, use the OCR parser:
 
-```bash
-go build -tags ocr .
-```
-
 ```go
 parser, _ := vergilevhasi.NewOCRParser()
 defer parser.Close()
-vkn, err := parser.ExtractVKNFromPDF("vergi-levhasi.pdf")
+vkn, err := parser.ExtractVKNFromImage("vergi-levhasi.png")
+// or from PDF bytes:
+// vkn, err := parser.ExtractVKNFromPDFBytes(pdfData)
 ```
 
 See the [Türkçe section](#ocr-ile-vergi-kimlik-no-çıkarma) for detailed OCR documentation.

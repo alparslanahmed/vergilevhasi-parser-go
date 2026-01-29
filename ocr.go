@@ -10,12 +10,16 @@ This is a ZERO-DEPENDENCY implementation that works without:
 It uses:
 - Pure Go image processing
 - Built-in PDF text/image extraction from the pdfcpu library
+- Code128 barcode scanning with gozxing library
 - Feature-based digit recognition with a trained classifier
 
 Usage:
 
 	parser, _ := vergilevhasi.NewOCRParser()
+	defer parser.Close()
 	vkn, err := parser.ExtractVKNFromImage("image.png")
+	// or from PDF bytes:
+	// vkn, err := parser.ExtractVKNFromPDFBytes(pdfData)
 */
 package vergilevhasi
 
@@ -293,61 +297,6 @@ func (p *OCRParser) upscaleImage(img image.Image, factor int) image.Image {
 	return upscaled
 }
 
-// cropBarcodeArea crops the barcode area from a Vergi Levhası image
-// Based on the standard GIB (Gelir İdaresi Başkanlığı) PDF format,
-// the barcode is located in the bottom-right corner, in the "ONAY KODU" section
-func (p *OCRParser) cropBarcodeArea(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// The barcode is typically in the right 35% and bottom 25% of the document
-	// These proportions are based on the standard Vergi Levhası layout
-	x0 := bounds.Min.X + int(float64(width)*0.60)  // Start at 60% from left
-	y0 := bounds.Min.Y + int(float64(height)*0.70) // Start at 70% from top
-	x1 := bounds.Max.X - int(float64(width)*0.02)  // End at 98% width (small margin)
-	y1 := bounds.Max.Y - int(float64(height)*0.02) // End at 98% height (small margin)
-
-	return p.cropImage(img, image.Rect(x0, y0, x1, y1))
-}
-
-// getBarcodeCropRegions returns multiple potential barcode regions to try
-func (p *OCRParser) getBarcodeCropRegions(bounds image.Rectangle) []image.Rectangle {
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	return []image.Rectangle{
-		// Bottom-right quadrant (most common location)
-		image.Rect(
-			bounds.Min.X+int(float64(width)*0.55),
-			bounds.Min.Y+int(float64(height)*0.65),
-			bounds.Max.X-int(float64(width)*0.01),
-			bounds.Max.Y-int(float64(height)*0.01),
-		),
-		// Right third, bottom half
-		image.Rect(
-			bounds.Min.X+int(float64(width)*0.65),
-			bounds.Min.Y+int(float64(height)*0.50),
-			bounds.Max.X,
-			bounds.Max.Y,
-		),
-		// Full right half
-		image.Rect(
-			bounds.Min.X+int(float64(width)*0.50),
-			bounds.Min.Y,
-			bounds.Max.X,
-			bounds.Max.Y,
-		),
-		// Full bottom half
-		image.Rect(
-			bounds.Min.X,
-			bounds.Min.Y+int(float64(height)*0.50),
-			bounds.Max.X,
-			bounds.Max.Y,
-		),
-	}
-}
-
 // cropImage crops a rectangular region from an image
 func (p *OCRParser) cropImage(img image.Image, rect image.Rectangle) image.Image {
 	// Ensure rect is within bounds
@@ -427,23 +376,6 @@ func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, 
 	}
 
 	return "", fmt.Errorf("could not extract VKN from PDF images")
-}
-
-// cropVKNTextArea crops the area where VKN number is typically printed
-// In Vergi Levhası, VKN appears as text near the barcode in the top-right section
-func (p *OCRParser) cropVKNTextArea(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// VKN text area: right side of document, upper portion where "VERGİ KİMLİK NO" section is
-	// Based on the standard layout: right 40%, top 40%
-	x0 := bounds.Min.X + int(float64(width)*0.55)
-	y0 := bounds.Min.Y + int(float64(height)*0.10)
-	x1 := bounds.Max.X - int(float64(width)*0.02)
-	y1 := bounds.Min.Y + int(float64(height)*0.35)
-
-	return p.cropImage(img, image.Rect(x0, y0, x1, y1))
 }
 
 // ExtractVKNFromPDFBytes extracts VKN from PDF bytes by extracting embedded images

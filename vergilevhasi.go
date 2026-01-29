@@ -30,11 +30,13 @@ The parser extracts the following information:
 # OCR Support
 
 For PDFs where the VKN is embedded as a barcode image rather than text,
-use the OCR parser (requires build tag 'ocr'):
+use the OCR parser:
 
-	// Build with: go build -tags ocr
 	parser, _ := vergilevhasi.NewOCRParser()
-	vkn, err := parser.ExtractVKNFromPDF("vergi-levhasi.pdf")
+	defer parser.Close()
+	vkn, err := parser.ExtractVKNFromImage("vergi-levhasi.png")
+	// or from PDF bytes:
+	// vkn, err := parser.ExtractVKNFromPDFBytes(pdfData)
 */
 package vergilevhasi
 

@@ -62,11 +62,8 @@ When adding new patterns or text matching:
 ## Running Tests
 
 ```bash
-# Run all tests (without OCR)
+# Run all tests
 go test -v
-
-# Run tests with OCR features
-go test -v -tags ocr
 
 # Run tests with coverage
 go test -v -cover
@@ -77,12 +74,10 @@ go test -v -cover
 ```
 ├── vergilevhasi.go    # Core data structures
 ├── parser.go          # PDF text parsing logic
-├── ocr.go             # OCR functionality (build tag: ocr)
-├── parser_test.go     # Unit tests for parser
-├── imgconv_test.go    # OCR integration tests
-├── example/           # Example applications
-│   ├── main.go        # Full example with OCR
-│   └── simple/        # Simple example without OCR
+├── ocr.go             # OCR functionality for barcode/image extraction
+├── parser_test.go     # Unit tests
+├── example/           # Example application
+│   └── main.go        # Full example with OCR
 └── testdata/          # Test files (gitignored)
 ```
 

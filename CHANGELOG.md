@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial public release
 - PDF parsing for Turkish tax plate (Vergi Levhası) documents
 - Extract structured data: name, trade name, address, tax types, activity codes, tax office, VKN, TC ID, start date, historical tax bases
-- OCR support (optional) for extracting VKN from barcode images
+- OCR support for extracting VKN from barcode images using pure Go implementation
 - Debug mode for inspecting extracted text
 - Bilingual documentation (Turkish/English)
 - MIT License

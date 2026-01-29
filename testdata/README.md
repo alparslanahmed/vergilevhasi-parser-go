@@ -4,13 +4,9 @@ This directory is for storing test PDF files used in testing.
 
 ## Usage
 
-To run OCR tests, place a sample Turkish tax plate (Vergi Levhası) PDF file in this directory:
+To run tests with sample PDFs, place Turkish tax plate (Vergi Levhası) PDF files in this directory.
 
-```
-testdata/sample_vergi_levhasi.pdf
-```
-
-Then update the `expectedTestVKN` constant in `imgconv_test.go` to match the VKN in your test PDF.
+The parser tests in `parser_test.go` use synthetic text data. For integration testing with real PDFs, you can add sample files here.
 
 ## Privacy Notice
 

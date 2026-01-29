@@ -815,6 +815,7 @@ func (p *Parser) parseLineBasedFormat(vl *VergiLevhasi, lines []string, contains
 	if vergiTuruIdx > 0 && vergiTuruIdx+1 < len(lines) {
 		dateRe := regexp.MustCompile(`^\d{2}\.\d{2}\.\d{4}$`)
 		tcknRe := regexp.MustCompile(`^\d{11}$`)
+		digitOnlyRe := regexp.MustCompile(`^\d+$`)
 
 		for i := vergiTuruIdx + 1; i < len(lines) && i < vergiTuruIdx+5; i++ {
 			trimmed := strings.TrimSpace(lines[i])
@@ -828,7 +829,7 @@ func (p *Parser) parseLineBasedFormat(vl *VergiLevhasi, lines []string, contains
 			}
 
 			// Skip if this is a number pattern (could be VKN or other ID)
-			if matched, _ := regexp.MatchString(`^\d+$`, trimmed); matched {
+			if digitOnlyRe.MatchString(trimmed) {
 				continue
 			}
 
