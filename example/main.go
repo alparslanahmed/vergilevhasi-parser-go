@@ -13,7 +13,7 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Vergi Levhası Parser - Example Application")
 		fmt.Println("")
-		fmt.Println("Usage: go run -tags ocr example/main.go <path-to-pdf>")
+		fmt.Println("Usage: go run example/main.go <path-to-pdf>")
 		fmt.Println("")
 		fmt.Println("Example:")
 		fmt.Println("  go run -tags ocr example/main.go vergi-levhasi.pdf")
@@ -29,7 +29,7 @@ func main() {
 
 	// Create a new parser
 	parser := vergilevhasi.NewParser()
-	parser.SetDebug(false) // Set to true to see extracted text
+	parser.SetDebug(true) // Set to true to see extracted text
 
 	// Parse the PDF
 	fmt.Printf("Parsing: %s\n\n", pdfPath)

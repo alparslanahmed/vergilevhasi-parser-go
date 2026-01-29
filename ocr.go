@@ -39,9 +39,7 @@ import (
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/oned"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
-	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
-	"github.com/sunshineplan/imgconv"
 )
 
 // OCRParser provides OCR capabilities for VKN extraction
@@ -71,13 +69,11 @@ func (p *OCRParser) SetOCRDebug(debug bool) {
 	p.debug = debug
 }
 
-// ExtractVKNFromPDFWithImage extracts VKN from a PDF by converting it to image and scanning
-// This uses github.com/sunshineplan/imgconv for PDF to image conversion (pure Go, no external dependencies)
-// It prioritizes barcode scanning (more reliable) over text extraction
+// ExtractVKNFromPDFWithImage extracts VKN from a PDF by extracting embedded images and scanning barcodes
+// Uses pdfcpu for image extraction (pure Go, no external dependencies)
 func (p *OCRParser) ExtractVKNFromPDFWithImage(data []byte) (string, error) {
-	// First try barcode scanning via imgconv (most reliable method)
 	if p.debug {
-		fmt.Println("Trying PDF to image conversion with imgconv for barcode scanning...")
+		fmt.Println("Extracting images from PDF using pdfcpu...")
 	}
 
 	vkn, err := p.ExtractVKNFromPDFBytes(data)
@@ -101,23 +97,27 @@ func (p *OCRParser) extractAllPDFImages(pdfData []byte) (images []image.Image, e
 	// Create pdfcpu configuration
 	conf := model.NewDefaultConfiguration()
 
-	// Read, validate and optimize the PDF
-	ctx, err := api.ReadValidateAndOptimize(rs, conf)
+	// Use api.ExtractImagesRaw to get all images
+	pageImages, err := api.ExtractImagesRaw(rs, nil, conf)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read PDF: %w", err)
+		return nil, fmt.Errorf("failed to extract images: %w", err)
 	}
 
-	// Extract images from all pages using pdfcpu's native ExtractPageImages
-	for pageNr := 1; pageNr <= ctx.PageCount; pageNr++ {
-		pageImages, err := pdfcpu.ExtractPageImages(ctx, pageNr, false)
-		if err != nil {
-			if p.debug {
-				fmt.Printf("Failed to extract images from page %d: %v\n", pageNr, err)
-			}
-			continue
+	if p.debug {
+		fmt.Printf("Found images on %d pages\n", len(pageImages))
+	}
+
+	// Process images from all pages
+	for pageNr, imgMap := range pageImages {
+		if p.debug {
+			fmt.Printf("Page %d: found %d images\n", pageNr+1, len(imgMap))
 		}
 
-		for objNr, pdfImage := range pageImages {
+		for objNr, pdfImage := range imgMap {
+			if p.debug {
+				fmt.Printf("Image obj %d: type=%s, %dx%d, bpc=%d, comp=%d\n",
+					objNr, pdfImage.FileType, pdfImage.Width, pdfImage.Height, pdfImage.Bpc, pdfImage.Comp)
+			}
 			// Decode the image from the pdfcpu Image reader
 			img, err := p.decodePDFCPUImage(pdfImage)
 			if err != nil {
@@ -272,17 +272,25 @@ func (p *OCRParser) decodeRawImageData(data []byte, pdfImage model.Image) (image
 	}
 }
 
-// upscaleImage upscales an image by the given factor using imgconv
+// upscaleImage upscales an image by the given factor using nearest-neighbor interpolation
 func (p *OCRParser) upscaleImage(img image.Image, factor int) image.Image {
 	bounds := img.Bounds()
 	newWidth := bounds.Dx() * factor
 	newHeight := bounds.Dy() * factor
 
-	// Use imgconv's Resize function
-	return imgconv.Resize(img, &imgconv.ResizeOption{
-		Width:  newWidth,
-		Height: newHeight,
-	})
+	// Create new RGBA image
+	upscaled := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
+
+	// Nearest-neighbor upscaling
+	for y := 0; y < newHeight; y++ {
+		srcY := bounds.Min.Y + y/factor
+		for x := 0; x < newWidth; x++ {
+			srcX := bounds.Min.X + x/factor
+			upscaled.Set(x, y, img.At(srcX, srcY))
+		}
+	}
+
+	return upscaled
 }
 
 // cropBarcodeArea crops the barcode area from a Vergi Levhası image
@@ -356,178 +364,69 @@ func (p *OCRParser) cropImage(img image.Image, rect image.Rectangle) image.Image
 	return cropped
 }
 
-// ExtractVKNFromPDFReaderWithImage extracts VKN from a PDF reader by converting to image
-// This uses github.com/sunshineplan/imgconv (pure Go, no external dependencies)
+// ExtractVKNFromPDFReaderWithImage extracts VKN from a PDF reader by extracting embedded images
+// Uses pdfcpu for image extraction (pure Go, no external dependencies)
 func (p *OCRParser) ExtractVKNFromPDFReaderWithImage(reader io.Reader) (string, error) {
-	// Read all data first so we can try multiple extraction methods
+	// Read all data first
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return "", fmt.Errorf("failed to read PDF data: %w", err)
 	}
 
-	// First, try to extract all embedded images
-	// The FIRST image in the PDF contains the VKN barcode (Code128 format)
+	// Extract all embedded images using pdfcpu
 	images, err := p.extractAllPDFImages(data)
-	if err == nil && len(images) > 0 {
-		if p.debug {
-			fmt.Printf("Found %d embedded images in PDF\n", len(images))
-		}
-
-		// The first image is the VKN barcode image - prioritize it
-		if len(images) > 0 {
-			firstImg := images[0]
-			if p.debug {
-				fmt.Printf("Scanning first image (VKN barcode): %dx%d\n", firstImg.Bounds().Dx(), firstImg.Bounds().Dy())
-				err := saveImage(firstImg, "debug_vkn_barcode_image.png")
-				if err != nil {
-					return "", err
-				}
-			}
-
-			// Try Code128 barcode scan on the first image (VKN barcode is Code128)
-			if vkn, err := p.scanCode128Barcode(firstImg); err == nil && vkn != "" {
-				if p.debug {
-					fmt.Printf("Successfully extracted VKN from first image barcode: %s\n", vkn)
-				}
-				return vkn, nil
-			}
-
-			// Try upscaling if the barcode image is small
-			if firstImg.Bounds().Dx() < 500 || firstImg.Bounds().Dy() < 100 {
-				upscaled := p.upscaleImage(firstImg, 4) // 4x upscale for better barcode reading
-				if p.debug {
-					fmt.Printf("Upscaled barcode image to: %dx%d\n", upscaled.Bounds().Dx(), upscaled.Bounds().Dy())
-					err := saveImage(upscaled, "debug_vkn_barcode_upscaled.png")
-					if err != nil {
-						return "", err
-					}
-				}
-				if vkn, err := p.scanCode128Barcode(upscaled); err == nil && vkn != "" {
-					return vkn, nil
-				}
-			}
-		}
-
-		// If first image didn't work, try remaining images
-		for i, img := range images {
-			if i == 0 {
-				continue // Already tried the first image
-			}
-			if p.debug {
-				fmt.Printf("Scanning embedded image %d: %dx%d\n", i+1, img.Bounds().Dx(), img.Bounds().Dy())
-				err := saveImage(img, fmt.Sprintf("debug_embedded_image_%d.png", i+1))
-				if err != nil {
-					return "", err
-				}
-			}
-
-			// Try direct barcode scan
-			if vkn, err := p.scanBarcode(img); err == nil && vkn != "" {
-				return vkn, nil
-			}
-
-			// Try upscaling if image is small
-			if img.Bounds().Dx() < 500 || img.Bounds().Dy() < 200 {
-				upscaled := p.upscaleImage(img, 3)
-				if p.debug {
-					err := saveImage(upscaled, fmt.Sprintf("debug_embedded_image_%d_upscaled.png", i+1))
-					if err != nil {
-						return "", err
-					}
-				}
-				if vkn, err := p.scanBarcode(upscaled); err == nil && vkn != "" {
-					return vkn, nil
-				}
-			}
-		}
-	} else if p.debug && err != nil {
-		fmt.Printf("Failed to extract embedded images: %v\n", err)
-	}
-
-	// Fallback to imgconv.Decode which renders the first page
-	img, err := imgconv.Decode(bytes.NewReader(data))
 	if err != nil {
-		return "", fmt.Errorf("failed to decode PDF with imgconv: %w", err)
+		return "", fmt.Errorf("failed to extract images from PDF: %w", err)
+	}
+
+	if len(images) == 0 {
+		return "", fmt.Errorf("no images found in PDF")
 	}
 
 	if p.debug {
-		fmt.Printf("PDF page converted to image: %dx%d\n", img.Bounds().Dx(), img.Bounds().Dy())
-		err := saveImage(img, "debug_pdf_page.png")
-		if err != nil {
-			return "", err
-		}
+		fmt.Printf("Found %d embedded images in PDF\n", len(images))
 	}
 
-	// If the image is too small, upscale it for better barcode scanning
-	if img.Bounds().Dx() < 1000 || img.Bounds().Dy() < 1000 {
-		upscaled := p.upscaleImage(img, 3) // 3x upscale
+	// Try each image for barcode scanning
+	for i, img := range images {
 		if p.debug {
-			fmt.Printf("Upscaled image to: %dx%d\n", upscaled.Bounds().Dx(), upscaled.Bounds().Dy())
-			err := saveImage(upscaled, "debug_pdf_page_upscaled.png")
-			if err != nil {
-				return "", err
-			}
+			fmt.Printf("Scanning image %d: %dx%d\n", i+1, img.Bounds().Dx(), img.Bounds().Dy())
+			_ = saveImage(img, fmt.Sprintf("debug_image_%d.png", i+1))
 		}
-		img = upscaled
-	}
 
-	// Try to scan barcode from the full image first
-	if vkn, err := p.scanBarcode(img); err == nil && vkn != "" {
-		return vkn, nil
-	}
-
-	// If full image scan fails, try to crop the barcode area
-	barcodeImg := p.cropBarcodeArea(img)
-	if barcodeImg != nil {
-		if p.debug {
-			err := saveImage(barcodeImg, "debug_barcode_crop.png")
-			if err != nil {
-				return "", err
+		// Try Code128 barcode scan (VKN barcode is Code128)
+		if vkn, err := p.scanCode128Barcode(img); err == nil && vkn != "" {
+			if p.debug {
+				fmt.Printf("Successfully extracted VKN from image %d: %s\n", i+1, vkn)
 			}
-		}
-		if vkn, err := p.scanBarcode(barcodeImg); err == nil && vkn != "" {
 			return vkn, nil
 		}
-	}
 
-	// Try different crop regions
-	cropRegions := p.getBarcodeCropRegions(img.Bounds())
-	for i, region := range cropRegions {
-		cropped := p.cropImage(img, region)
-		if cropped == nil {
-			continue
-		}
-		if p.debug {
-			err := saveImage(cropped, fmt.Sprintf("debug_barcode_region_%d.png", i))
-			if err != nil {
-				return "", err
+		// Try general barcode scan
+		if vkn, err := p.scanBarcode(img); err == nil && vkn != "" {
+			if p.debug {
+				fmt.Printf("Successfully extracted VKN from image %d: %s\n", i+1, vkn)
 			}
-		}
-		if vkn, err := p.scanBarcode(cropped); err == nil && vkn != "" {
 			return vkn, nil
 		}
-	}
 
-	// Last resort: Try OCR on the VKN area (the numbers printed above/below the barcode)
-	// VKN is typically printed as visible text near the barcode
-	if p.debug {
-		fmt.Println("Barcode scanning failed, trying OCR on VKN area...")
-	}
-
-	vknArea := p.cropVKNTextArea(img)
-	if vknArea != nil {
-		if p.debug {
-			err := saveImage(vknArea, "debug_vkn_text_area.png")
-			if err != nil {
-				return "", err
+		// Try upscaling if the image is small
+		if img.Bounds().Dx() < 500 || img.Bounds().Dy() < 100 {
+			upscaled := p.upscaleImage(img, 4)
+			if p.debug {
+				fmt.Printf("Upscaled image %d to: %dx%d\n", i+1, upscaled.Bounds().Dx(), upscaled.Bounds().Dy())
+				_ = saveImage(upscaled, fmt.Sprintf("debug_image_%d_upscaled.png", i+1))
+			}
+			if vkn, err := p.scanCode128Barcode(upscaled); err == nil && vkn != "" {
+				return vkn, nil
+			}
+			if vkn, err := p.scanBarcode(upscaled); err == nil && vkn != "" {
+				return vkn, nil
 			}
 		}
-		if vkn, err := p.ExtractVKNFromImageData(vknArea); err == nil && vkn != "" {
-			return vkn, nil
-		}
 	}
 
-	return "", fmt.Errorf("could not extract VKN from PDF barcode")
+	return "", fmt.Errorf("could not extract VKN from PDF images")
 }
 
 // cropVKNTextArea crops the area where VKN number is typically printed
@@ -547,8 +446,8 @@ func (p *OCRParser) cropVKNTextArea(img image.Image) image.Image {
 	return p.cropImage(img, image.Rect(x0, y0, x1, y1))
 }
 
-// ExtractVKNFromPDFBytes extracts VKN from PDF bytes by converting to image and scanning barcode
-// This uses github.com/sunshineplan/imgconv (pure Go, no external dependencies)
+// ExtractVKNFromPDFBytes extracts VKN from PDF bytes by extracting embedded images
+// Uses pdfcpu for image extraction (pure Go, no external dependencies)
 func (p *OCRParser) ExtractVKNFromPDFBytes(pdfData []byte) (string, error) {
 	return p.ExtractVKNFromPDFReaderWithImage(bytes.NewReader(pdfData))
 }

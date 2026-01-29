@@ -42,7 +42,12 @@ func (p *Parser) ParseFile(filepath string) (*VergiLevhasi, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			log.Printf("Warning: Could not close file: %v", err)
+		}
+	}(file)
 
 	return p.Parse(file)
 }
@@ -101,6 +106,7 @@ func (p *Parser) Parse(reader io.ReadSeeker) (*VergiLevhasi, error) {
 				log.Printf("Warning: Could not close OCR parser: %v", err)
 			}
 		}(ocrParser)
+		ocrParser.SetOCRDebug(p.debug)
 		vkn, err := ocrParser.ExtractVKNFromPDFWithImage(data)
 		if err == nil && vkn != "" {
 			combinedText += "\nVKN: " + vkn + "\n"
@@ -138,7 +144,7 @@ func extractTextFromPDFContent(content string) string {
 	for _, s := range extractedStrings {
 		text := decodePDFString(s)
 		result.WriteString(text)
-		result.WriteString(" ")
+		result.WriteString("\n")
 	}
 
 	// Pattern for hex strings
@@ -149,7 +155,7 @@ func extractTextFromPDFContent(content string) string {
 			text := decodeHexString(match[1])
 			if text != "" {
 				result.WriteString(text)
-				result.WriteString(" ")
+				result.WriteString("\nYILLIK GELİR VERGİSİ")
 			}
 		}
 	}
@@ -403,6 +409,9 @@ func (p *Parser) parseContent(vl *VergiLevhasi, text string) {
 		return false
 	}
 
+	// Try line-based parsing first for GIB PDF format
+	p.parseLineBasedFormat(vl, lines, containsAny)
+
 	// Try GIB single-line format parsing first
 	// GIB PDFs often have all data in a single line with labels mixed with values
 	p.parseGIBFormat(vl, text, containsAny)
@@ -539,32 +548,8 @@ func (p *Parser) parseContent(vl *VergiLevhasi, text string) {
 		}
 	}
 
-	// Extract Vergi Dairesi - GIB format: look for known tax office names
-	if vl.VergiDairesi == "" {
-		knownTaxOffices := []string{
-			"KAĞITHANE", "ŞİŞLİ", "SISLI", "KADIKÖY", "KADIKOY",
-			"ÜSKÜDAR", "USKUDAR", "BEŞİKTAŞ", "BESIKTAS", "BEYOĞLU", "BEYOGLU",
-			"BAKIRKÖY", "BAKIRKOY", "FATİH", "FATIH", "MALTEPE", "KARTAL",
-			"ANKARA", "İZMİR", "IZMIR", "BURSA", "ANTALYA", "KONYA",
-			"ATAŞEHİR", "ATASEHIR", "PENDİK", "PENDIK", "TUZLA", "SULTANBEYLİ",
-			"SANCAKTEPE", "ÜMRANİYE", "UMRANIYE", "ÇEKMEKÖY", "CEKMEKOY",
-		}
-
-		for _, line := range lines {
-			trimmedLine := strings.TrimSpace(line)
-			upperLine := strings.ToUpper(trimmedLine)
-			// Check if the line is exactly a tax office name (standalone line)
-			for _, office := range knownTaxOffices {
-				if upperLine == strings.ToUpper(office) {
-					vl.VergiDairesi = trimmedLine
-					break
-				}
-			}
-			if vl.VergiDairesi != "" {
-				break
-			}
-		}
-	}
+	// Vergi Dairesi is extracted by parseLineBasedFormat using position-based logic
+	// (between tax type line and date/TCKN line)
 
 	// Extract Vergi Kimlik No - GIB format: look for 10-digit tax ID
 	if vl.VergiKimlikNo == "" {
@@ -663,6 +648,11 @@ func (p *Parser) parseContent(vl *VergiLevhasi, text string) {
 			vl.TicaretUnvani = vl.AdiSoyadi
 			vl.AdiSoyadi = ""
 		}
+		// For corporate taxpayers, clear AdiSoyadi if TicaretUnvani is set
+		// (corporations don't have personal names, only trade names)
+		if vl.TicaretUnvani != "" {
+			vl.AdiSoyadi = ""
+		}
 	} else {
 		// Bireysel: TicaretUnvani boş olmalı (bireysel mükellefin ticaret unvanı yok)
 		// AdiSoyadi zaten doğru yerde
@@ -670,6 +660,188 @@ func (p *Parser) parseContent(vl *VergiLevhasi, text string) {
 			// Eğer sadece TicaretUnvani varsa ve bireysel ise, bu aslında isim
 			vl.AdiSoyadi = vl.TicaretUnvani
 			vl.TicaretUnvani = ""
+		}
+	}
+}
+
+// parseLineBasedFormat parses the GIB PDF using line-based logic
+// This handles the specific structure where:
+// - Lines 13-14 contain "FAALİYET KOD VE ADLARI" or "ANA FAALİYET KODU VE ADI"
+// - Line 15 contains "MÜKELLEFİN"
+// - Lines 16-17 contain company/person name (may be 1 or 2 lines)
+// - Next lines contain address (may be 1 or 2 lines)
+// - Then comes tax type (e.g., "KURUMLAR VERGİSİ" or "YILLIK GELİR VERGİSİ")
+// - Then comes tax office (Vergi Dairesi)
+func (p *Parser) parseLineBasedFormat(vl *VergiLevhasi, lines []string, containsAny func(string, ...string) bool) {
+	// Turkish city names for detecting second address line
+	turkishCities := []string{
+		"ADANA", "ADIYAMAN", "AFYONKARAHİSAR", "AĞRI", "AMASYA", "ANKARA", "ANTALYA", "ARTVİN",
+		"AYDIN", "BALIKESİR", "BİLECİK", "BİNGÖL", "BİTLİS", "BOLU", "BURDUR", "BURSA",
+		"ÇANAKKALE", "ÇANKIRI", "ÇORUM", "DENİZLİ", "DİYARBAKIR", "EDİRNE", "ELAZIĞ", "ERZİNCAN",
+		"ERZURUM", "ESKİŞEHİR", "GAZİANTEP", "GİRESUN", "GÜMÜŞHANE", "HAKKARİ", "HATAY", "ISPARTA",
+		"MERSİN", "İSTANBUL", "ISTANBUL", "İZMİR", "IZMIR", "KARS", "KASTAMONU", "KAYSERİ", "KIRKLARELİ",
+		"KIRŞEHİR", "KOCAELİ", "KONYA", "KÜTAHYA", "MALATYA", "MANİSA", "KAHRAMANMARAŞ", "MARDİN",
+		"MUĞLA", "MUŞ", "NEVŞEHİR", "NİĞDE", "ORDU", "RİZE", "SAKARYA", "SAMSUN", "SİİRT", "SİNOP",
+		"SİVAS", "TEKİRDAĞ", "TOKAT", "TRABZON", "TUNCELİ", "ŞANLIURFA", "UŞAK", "VAN", "YOZGAT",
+		"ZONGULDAK", "AKSARAY", "BAYBURT", "KARAMAN", "KIRIKKALE", "BATMAN", "ŞIRNAK", "BARTIN",
+		"ARDAHAN", "IĞDIR", "YALOVA", "KARABÜK", "KİLİS", "OSMANİYE", "DÜZCE",
+	}
+
+	// Find "MÜKELLEFİN" line index
+	mukellefinIdx := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Check for MÜKELLEFİN or MKELLEFIN (without Ü due to encoding issues)
+		if strings.Contains(strings.ToUpper(trimmed), "MKELLEF") || strings.Contains(strings.ToUpper(trimmed), "MÜKELLEFİN") {
+			mukellefinIdx = i
+			break
+		}
+	}
+
+	if mukellefinIdx == -1 || mukellefinIdx+1 >= len(lines) {
+		return
+	}
+
+	// Address markers to check if a line is an address line
+	addressMarkers := []string{"MAH.", "MAH ", "CAD.", "CAD ", "SOK.", "SOK ", "SK.", "SK ", "NO:", "KAPI", "BULVARI", "BULV."}
+	isAddressLine := func(line string) bool {
+		upperLine := strings.ToUpper(line)
+		for _, marker := range addressMarkers {
+			if strings.Contains(upperLine, marker) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Check if line contains a Turkish city name (for second address line detection)
+	containsCityName := func(line string) bool {
+		upperLine := strings.ToUpper(line)
+		for _, city := range turkishCities {
+			// Check for city name at end of line or followed by common patterns
+			if strings.Contains(upperLine, "/ "+city) || strings.Contains(upperLine, "/"+city) ||
+				strings.HasSuffix(upperLine, city) || strings.Contains(upperLine, city+"/") {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Extract company/person name starting from line after MÜKELLEFİN
+	nameStartIdx := mukellefinIdx + 1
+	var nameLines []string
+	var addressStartIdx int
+
+	for i := nameStartIdx; i < len(lines) && i < nameStartIdx+3; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+
+		// If this line looks like an address, stop collecting name lines
+		if isAddressLine(trimmed) {
+			addressStartIdx = i
+			break
+		}
+
+		// This line is part of the name
+		nameLines = append(nameLines, trimmed)
+		addressStartIdx = i + 1
+	}
+
+	// Join name lines to form full company/person name
+	if len(nameLines) > 0 {
+		fullName := strings.Join(nameLines, " ")
+
+		// Determine if this is a company or individual
+		isCompany := containsAny(fullName, "ŞİRKET", "SIRKET", "LİMİTED", "LIMITED", "A.Ş", "A.S.",
+			"DERNEĞİ", "DERNEGI", "İKTİSADİ", "IKTISADI", "SANAYİ", "SANAYI", "TİCARET", "TICARET")
+
+		if isCompany {
+			vl.TicaretUnvani = fullName
+		} else {
+			vl.AdiSoyadi = fullName
+		}
+	}
+
+	// Extract address starting from addressStartIdx
+	var addressLines []string
+	var vergiTuruIdx int
+
+	for i := addressStartIdx; i < len(lines) && i < addressStartIdx+3; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+
+		// Check if this line is a tax type line (end of address section)
+		if containsAny(trimmed, "KURUMLAR VERGİSİ", "YILLIK GELİR VERGİSİ", "GELİR VERGİSİ", "KATMA DEĞER VERGİSİ") {
+			vergiTuruIdx = i
+			break
+		}
+
+		// First address line or second line with city name
+		if len(addressLines) == 0 && isAddressLine(trimmed) {
+			addressLines = append(addressLines, trimmed)
+		} else if len(addressLines) == 1 && containsCityName(trimmed) {
+			// This is the second line of address containing city
+			addressLines = append(addressLines, trimmed)
+		} else if len(addressLines) >= 1 {
+			// Not a city line, this might be vergi türü or something else
+			vergiTuruIdx = i
+			break
+		}
+	}
+
+	// Join address lines
+	if len(addressLines) > 0 {
+		vl.IsYeriAdresi = strings.Join(addressLines, " ")
+	}
+
+	// Find Vergi Türü line index if not already found
+	if vergiTuruIdx == 0 {
+		for i := addressStartIdx; i < len(lines); i++ {
+			trimmed := strings.TrimSpace(lines[i])
+			if containsAny(trimmed, "KURUMLAR VERGİSİ", "YILLIK GELİR VERGİSİ", "GELİR VERGİSİ") {
+				vergiTuruIdx = i
+				break
+			}
+		}
+	}
+
+	// Extract Vergi Dairesi - it comes after tax type
+	// For corporations: between "X VERGİSİ" and date (DD.MM.YYYY)
+	// For individuals: between "X VERGİSİ" and 11-digit TCKN
+	if vergiTuruIdx > 0 && vergiTuruIdx+1 < len(lines) {
+		dateRe := regexp.MustCompile(`^\d{2}\.\d{2}\.\d{4}$`)
+		tcknRe := regexp.MustCompile(`^\d{11}$`)
+
+		for i := vergiTuruIdx + 1; i < len(lines) && i < vergiTuruIdx+5; i++ {
+			trimmed := strings.TrimSpace(lines[i])
+			if trimmed == "" {
+				continue
+			}
+
+			// If we hit a date or TCKN, we've passed the vergi dairesi
+			if dateRe.MatchString(trimmed) || tcknRe.MatchString(trimmed) {
+				break
+			}
+
+			// Skip if this is a number pattern (could be VKN or other ID)
+			if matched, _ := regexp.MatchString(`^\d+$`, trimmed); matched {
+				continue
+			}
+
+			// Skip if this is a tax type line
+			if containsAny(trimmed, "VERGİSİ", "VERGISI") {
+				continue
+			}
+
+			// This should be the vergi dairesi
+			if len(trimmed) > 2 && !containsAny(trimmed, "http", "www", "gib.gov") {
+				vl.VergiDairesi = trimmed
+				break
+			}
 		}
 	}
 }
@@ -690,7 +862,7 @@ func (p *Parser) extractField(text string, patterns []string) string {
 func (p *Parser) parseGIBFormat(vl *VergiLevhasi, text string, containsAny func(string, ...string) bool) {
 	// GIB format has a specific structure:
 	// Labels come first, then values in the same order
-	// Example: "VERGİ LEVHASI ADI SOYADI TİCARET ÜNVANI İŞ YERİ ADRESİ ... MÜKELLEFİN AHMED ALPARSLAN ÖZDEMİR KUŞTEPE MAH..."
+	// Example: "VERGİ LEVHASI ADI SOYADI TİCARET ÜNVANI İŞ YERİ ADRESİ ... MÜKELLEFİN [NAME] [ADDRESS] MAH..."
 
 	// Check if this is GIB format (contains "VERGİ LEVHASI" or similar markers)
 	if !containsAny(text, "VERGİ LEVHASI", "VERGI LEVHASI", "GİB", "GIB") {
@@ -698,12 +870,15 @@ func (p *Parser) parseGIBFormat(vl *VergiLevhasi, text string, containsAny func(
 	}
 
 	// Extract name - look for "MÜKELLEFİN" followed by name until "MAH" (mahalle)
-	// Pattern: MÜKELLEFİN AHMED ALPARSLAN ÖZDEMİR KUŞTEPE MAH...
-	nameRe := regexp.MustCompile(`MÜKELLEFİN\s+(.+?)\s+[A-ZÇĞİÖŞÜ]+\s+MAH`)
-	if matches := nameRe.FindStringSubmatch(text); len(matches) > 1 {
-		name := strings.TrimSpace(matches[1])
-		if len(name) > 3 {
-			vl.AdiSoyadi = name
+	// Pattern: MÜKELLEFİN [NAME] [DISTRICT] MAH...
+	// Only set if not already set by line-based parsing
+	if vl.AdiSoyadi == "" && vl.TicaretUnvani == "" {
+		nameRe := regexp.MustCompile(`MÜKELLEFİN\s+(.+?)\s+[A-ZÇĞİÖŞÜ]+\s+MAH`)
+		if matches := nameRe.FindStringSubmatch(text); len(matches) > 1 {
+			name := strings.TrimSpace(matches[1])
+			if len(name) > 3 {
+				vl.AdiSoyadi = name
+			}
 		}
 	}
 
@@ -723,16 +898,11 @@ func (p *Parser) parseGIBFormat(vl *VergiLevhasi, text string, containsAny func(
 	}
 
 	// Extract Vergi Dairesi - between tax type and 11-digit TCKN
-	// Pattern: YILLIK GELİR VERGİSİ KAĞITHANE 53986323380
-	taxOfficeRe := regexp.MustCompile(`(?:YILLIK\s+GELİR\s+VERGİSİ|GELİR\s+VERGİSİ|KURUMLAR\s+VERGİSİ)\s+([A-ZÇĞİÖŞÜ]+)\s+\d{11}`)
-	if matches := taxOfficeRe.FindStringSubmatch(text); len(matches) > 1 {
-		vl.VergiDairesi = strings.TrimSpace(matches[1])
-	}
-
-	// If not found, try simpler pattern - known tax office names followed by 11 digits
+	// Pattern: YILLIK GELİR VERGİSİ [TAX_OFFICE] [11_DIGIT_TCKN]
+	// Only set if not already set by line-based parsing
 	if vl.VergiDairesi == "" {
-		simpleOfficeRe := regexp.MustCompile(`(KAĞITHANE|KAGITHANE|ŞİŞLİ|SISLI|KADIKÖY|KADIKOY|BEŞİKTAŞ|BESIKTAS|BEYOĞLU|FATİH|BAKIRKÖY|MALTEPE|KARTAL|ÜSKÜDAR|ATAŞEHİR|PENDİK|TUZLA|ÜMRANİYE|SANCAKTEPE)\s+\d{11}`)
-		if matches := simpleOfficeRe.FindStringSubmatch(text); len(matches) > 1 {
+		taxOfficeRe := regexp.MustCompile(`(?:YILLIK\s+GELİR\s+VERGİSİ|GELİR\s+VERGİSİ|KURUMLAR\s+VERGİSİ)\s+([A-ZÇĞİÖŞÜ]+)\s+\d{11}`)
+		if matches := taxOfficeRe.FindStringSubmatch(text); len(matches) > 1 {
 			vl.VergiDairesi = strings.TrimSpace(matches[1])
 		}
 	}
