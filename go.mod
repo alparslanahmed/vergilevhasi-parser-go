@@ -1,11 +1,11 @@
 module github.com/alparslanahmed/vergilevhasi-parser-go
 
-go 1.24.12
+go 1.25.0
 
 require (
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/pdfcpu/pdfcpu v0.11.1
-	golang.org/x/text v0.33.0
+	golang.org/x/text v0.35.0
 )
 
 require (
@@ -16,7 +16,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
-	golang.org/x/image v0.32.0 // indirect
+	golang.org/x/image v0.38.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
